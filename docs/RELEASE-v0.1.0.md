@@ -25,7 +25,7 @@ against a host; every subcommand reads a path or a JSON file and returns a verdi
 
 * **Recomputable.** `tests/cross_check.sh` identifies with `residue` and measures
   with `stat(1)`; the two counts must agree or the script fails.
-* **Falsifiable.** Fifteen unit tests, of which five are negative controls: every
+* **Falsifiable.** Sixteen unit tests, of which five are negative controls: every
   check has an input on which it must not pass.
 * **Portable.** Zero dependencies, Python 3.9+, runs on Linux and macOS in CI; the
   QEMU lab runs the same fixtures on real ext4 with no egress.

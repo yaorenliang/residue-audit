@@ -30,7 +30,12 @@ jobs:
           set -eu
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           if gh release view "$tag" > /dev/null 2>&1; then
-              echo "release $tag already exists; nothing to do"
+              # A tag can move; the notes should move with it instead of
+              # freezing the first draft.
+              gh release edit "$tag" \
+                  --title "$tag" \
+                  --notes-file docs/RELEASE-v0.1.0.md
+              echo "release $tag updated"
               exit 0
           fi
           gh release create "$tag" \
