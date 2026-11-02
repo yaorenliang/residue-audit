@@ -2,6 +2,8 @@
 
 **从第三方的视角，测量一个藏起来的植入物到底留下了什么。**
 
+![verify](https://github.com/yaorenliang/residue-audit/actions/workflows/ci.yml/badge.svg)
+
 事故报告总以同一句话结尾：*未发现持久化痕迹。*
 这句话有两个截然不同的意思，而大多数工具分不清它们。
 一个意思是「它不在这儿」；另一个是「它在这儿，只是我们看的方式看不见它」。

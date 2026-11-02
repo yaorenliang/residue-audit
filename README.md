@@ -2,6 +2,8 @@
 
 **Measure what a hidden implant leaves behind — from a third party's point of view.**
 
+![verify](https://github.com/yaorenliang/residue-audit/actions/workflows/ci.yml/badge.svg)
+
 Every incident report ends the same way: *we found no evidence of persistence.*
 That sentence has two very different meanings, and most tooling cannot tell them
 apart. It can mean **it was not there**. It can also mean **it was there, and the
