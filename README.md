@@ -21,11 +21,11 @@ trace.order         fail     5 artifact(s) have a higher inode than every siblin
 summary command=trace status=fail exit=2
 ```
 
-Read it again. The implant did everything a careful operator does: it borrowed
-timestamps from its neighbours, it landed in directories that already had company,
-it stayed out of the last two minutes of history. It is still visible in two places,
-because a timestamp can be rewritten and a creation order cannot, and because
-changing an mtime moves a ctime that nobody can put back.
+That implant did everything a careful operator does. It borrowed timestamps from
+its neighbours, it landed in directories that already had company, and it stayed
+out of the last two minutes of history. It is still visible in two places, because
+a timestamp can be rewritten and a creation order cannot, and because changing an
+mtime moves a ctime that nobody can put back.
 
 So the question is not "can we detect it". The question is where the hiding stops
 working, and how somebody else checks that claim without trusting this code.
