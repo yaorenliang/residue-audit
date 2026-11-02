@@ -142,16 +142,21 @@ class Scanner:
 
     def discover(self) -> None:
         units, targets = self._marker_units()
-        names = self._broad_names(targets) if self.broad else set()
+        names = self._broad_names(targets)
         for path in self._scan_files():
             reason = self._strong_claim(path, units, targets)
-            if reason is None and self.broad:
-                reason = self._broad_claim(path, names)
-                if reason is not None:
-                    reason = "broad:" + reason
             if reason is None:
-                self.weak.append(path)
-                continue
+                # A file the broad rule would have claimed is a candidate we are
+                # deliberately not auditing. Everything else - ordinary system
+                # files - is not a claim of any kind and must not be reported as
+                # one: a "weak claim" nobody ever made is noise, not caution.
+                broad = self._broad_claim(path, names)
+                if broad is None:
+                    continue
+                if not self.broad:
+                    self.weak.append(path)
+                    continue
+                reason = "broad:" + broad
             self.marker_hits[path] = reason
             self.artifacts.append(path)
         self.artifacts.sort()

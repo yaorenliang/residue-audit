@@ -30,7 +30,7 @@
       ],
       "name": "trace.artifacts",
       "status": "pass",
-      "why": "5 artifact(s) matched the marker set (+8 weak claim(s) not audited)"
+      "why": "5 artifact(s) matched the marker set"
     },
     {
       "evidence": [
@@ -127,7 +127,7 @@
       "usr/local/bin"
     ],
     "uncorroborated": 0,
-    "weak_claims": 8
+    "weak_claims": 0
   },
   "status": "fail"
 }
