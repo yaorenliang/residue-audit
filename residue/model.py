@@ -14,11 +14,17 @@ PASS = "pass"
 PARTIAL = "partial"
 FAIL = "fail"
 SKIP = "skip"
+ERROR = "error"
 
 # aggregate severity, used to fold a list of checks into one status
 SEVERITY = {PASS: 0, SKIP: 1, PARTIAL: 2, FAIL: 3}
 
-EXIT = {PASS: 0, PARTIAL: 1, FAIL: 2, SKIP: 3}
+# Exit codes are a process interface: a gate reads the number and decides whether
+# a host is compromised. So every meaning gets its own code, and "the tool could
+# not judge" gets one that no verdict can reach - a crash or a mistyped flag must
+# never be readable as partial or fail. ERROR is a code, not a verdict: it is
+# deliberately absent from SEVERITY, so no Check can claim it.
+EXIT = {PASS: 0, PARTIAL: 1, FAIL: 2, SKIP: 3, ERROR: 4}
 
 
 @dataclass(frozen=True)

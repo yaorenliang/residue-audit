@@ -56,5 +56,59 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(report.facts["pairs"], 0)
 
 
+
+class BatchUndefinedSimilarityTest(unittest.TestCase):
+    """F-10: an empty feature set is missing evidence, not sameness."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-batch-empty-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _write(self, name, features):
+        from tests import fixtures as fx
+
+        path = os.path.join(self.tmp, name + ".json")
+        fx.write_json(path, {"name": name, "features": features})
+        return path
+
+    def _check(self, report):
+        for check in report.checks:
+            if check.name.startswith("batch."):
+                return check
+        raise AssertionError("no batch check in %r" % ([c.name for c in report.checks],))
+
+    def test_f10_two_empty_feature_sets_are_undefined(self):
+        report = batch.run(
+            [self._write("build-a", []), self._write("build-b", [])]
+        )
+        check = self._check(report)
+        self.assertEqual(check.status, SKIP)
+        self.assertIn("both feature sets are empty", check.why)
+        self.assertEqual(report.status(), SKIP)
+        self.assertEqual(report.exit_code(), 3)
+        self.assertIsNone(report.facts["min_similarity"])
+
+    def test_f10_jaccard_of_two_empty_sets_is_none(self):
+        self.assertIsNone(batch.jaccard(set(), set()))
+        self.assertEqual(batch.jaccard(set(), {"a"}), 0.0)
+        self.assertEqual(batch.jaccard({"a"}, {"a"}), 1.0)
+
+    def test_f10_an_empty_pair_does_not_hide_a_real_pair(self):
+        report = batch.run(
+            [
+                self._write("build-a", []),
+                self._write("build-b", []),
+                self._write("build-c", ["f%d" % i for i in range(50)]),
+                self._write("build-d", ["g%d" % i for i in range(50)]),
+            ]
+        )
+        statuses = {check.name: check.status for check in report.checks}
+        self.assertEqual(statuses["batch.build-a_vs_build-b"], SKIP)
+        self.assertEqual(statuses["batch.build-c_vs_build-d"], PASS)
+        self.assertEqual(report.facts["pairs"], 6)
+        # the undefined pair is ignored, so the minimum is the real 0.0
+        self.assertEqual(report.facts["min_similarity"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

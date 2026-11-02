@@ -98,6 +98,33 @@
       "why": "5 artifact(s) have a ctime newer than every sibling: mtime can be borrowed, ctime cannot"
     },
     {
+      "evidence": [
+        {
+          "field": "dir_ctime_vs_oldest_mtime",
+          "path": "<root>/etc/cron.d",
+          "value": "<dir_ctime> > <artifact_mtime>"
+        },
+        {
+          "field": "dir_ctime_vs_oldest_mtime",
+          "path": "<root>/etc/systemd/system",
+          "value": "<dir_ctime> > <artifact_mtime>"
+        },
+        {
+          "field": "dir_ctime_vs_oldest_mtime",
+          "path": "<root>/usr/libexec",
+          "value": "<dir_ctime> > <artifact_mtime>"
+        },
+        {
+          "field": "dir_ctime_vs_oldest_mtime",
+          "path": "<root>/usr/local/bin",
+          "value": "<dir_ctime> > <artifact_mtime>"
+        }
+      ],
+      "name": "trace.directory_ctime",
+      "status": "partial",
+      "why": "4 holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent"
+    },
+    {
       "evidence": [],
       "name": "trace.fresh",
       "status": "pass",
@@ -108,6 +135,12 @@
       "name": "trace.order",
       "status": "fail",
       "why": "5 artifact(s) have a higher inode than every sibling, so creation order is recoverable"
+    },
+    {
+      "evidence": [],
+      "name": "trace.readable",
+      "status": "pass",
+      "why": "every scanned path was read; no verdict rests on a skipped path"
     }
   ],
   "command": "trace",
@@ -116,6 +149,7 @@
     "aligned": 5,
     "artifacts": 5,
     "ctime": 5,
+    "errors": [],
     "fresh": 0,
     "leaks": 0,
     "order": 5,
@@ -126,6 +160,7 @@
       "usr/libexec",
       "usr/local/bin"
     ],
+    "truncated_files": 0,
     "uncorroborated": 0,
     "weak_claims": 0
   },

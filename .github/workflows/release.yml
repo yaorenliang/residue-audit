@@ -29,16 +29,27 @@ jobs:
         run: |
           set -eu
           tag="${{ github.event.inputs.tag || github.ref_name }}"
+          # The notes are a per-version artefact: shipping v0.2.0 while handing
+          # readers the v0.1.0 checklist would describe a program that no longer
+          # exists. A tag without its own notes file is a mistake, not a case to
+          # paper over, so the job fails instead of falling back.
+          notes="docs/RELEASE-${tag}.md"
+          if [ ! -f "$notes" ]; then
+              echo "missing release notes for $tag: $notes" >&2
+              echo "write that file (copy docs/RELEASE-v0.1.0.md as the shape) and push the tag again" >&2
+              exit 1
+          fi
           if gh release view "$tag" > /dev/null 2>&1; then
               # A tag can move; the notes should move with it instead of
               # freezing the first draft.
               gh release edit "$tag" \
                   --title "$tag" \
-                  --notes-file docs/RELEASE-v0.1.0.md
-              echo "release $tag updated"
+                  --notes-file "$notes"
+              echo "release $tag updated from $notes"
               exit 0
           fi
           gh release create "$tag" \
               --title "$tag" \
-              --notes-file docs/RELEASE-v0.1.0.md \
+              --notes-file "$notes" \
               --verify-tag
+          echo "release $tag created from $notes"

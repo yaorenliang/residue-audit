@@ -2,12 +2,22 @@
 
 Two traps this module refuses to fall into:
 
-  * the denominator is every host in the ledger, not every host that was hit,
-    otherwise "coverage" silently becomes "of the things we found, we found them";
+  * the denominator is the hosts that reached deploy, not every host observed.
+    A host that was only scanned had nothing to detect, and counting it would
+    let an operator flatter the rate by scanning more than it infected. The
+    other reading is still reported, as ``hit_rate_all_hosts``, so a reader can
+    see how far the two diverge instead of being handed one of them;
   * a hit before deploy and a hit after deploy are different events, so they are
-    counted separately instead of being folded into one rate.
+    counted separately instead of being folded into one rate. A rule that fires
+    before the implant exists is a false positive, and a false positive is not
+    coverage.
 
 "Exactly half" is not a majority. 50.0 percent is partial coverage.
+
+Event kinds outside {deploy, mine, scan} do not silently become scans: they are
+listed in ``unknown_events`` and downgrade ``dwell.schema`` to partial, because a
+vocabulary that drifted upstream shrinks the denominator quietly, and every rate
+computed from a shrinking denominator goes up.
 """
 
 from __future__ import annotations
@@ -16,6 +26,9 @@ import json
 from typing import Dict, List, Optional
 
 from .model import FAIL, PASS, PARTIAL, SKIP, Check, Evidence, Report
+
+# the only kinds this module can interpret; anything else is reported, not guessed
+KINDS = frozenset(("deploy", "mine", "scan"))
 
 
 def load_ledger(path: str) -> List[dict]:
@@ -39,14 +52,36 @@ def load_hits(path: Optional[str]) -> List[dict]:
     return list(data)
 
 
-def _median(values: List[int]) -> int:
+def _median(values: List[int]) -> float:
+    """The median, which for an even count is the mean of the two middle values.
+
+    Taking ``ordered[len // 2]`` is the upper median: it reports one of the two
+    middle readings and biases every even-sized distribution upward. On the demo
+    ledger that reads 180 where the honest answer is 125.
+    """
     ordered = sorted(values)
-    return ordered[len(ordered) // 2]
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 def _p90(values: List[int]) -> int:
+    """Nearest-rank 90th percentile: the ceil(0.9 * n)-th smallest value.
+
+    Nearest-rank never interpolates, so the answer is always a value that was
+    actually observed rather than a number between two of them.
+    """
     ordered = sorted(values)
-    return ordered[round(0.9 * (len(ordered) - 1))]
+    rank = (9 * len(ordered) + 9) // 10  # ceil(0.9 * n), integer arithmetic
+    return ordered[max(rank, 1) - 1]
+
+
+def _number(value: float) -> str:
+    """Print 125.0 as 125 and 122.5 as 122.5, so the span line stays readable."""
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
@@ -60,27 +95,34 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
             {"ledger": ledger_path},
         )
 
-    first: Dict[str, int] = {}
+    deploys: Dict[str, int] = {}
     last: Dict[str, int] = {}
-    deployed: Dict[str, int] = {}
     mined = set()
     failed = set()
+    unknown: Dict[str, int] = {}
 
     for event in events:
         host = str(event["host"])
         ts = int(event["ts"])
-        first.setdefault(host, ts)
         last[host] = max(last.get(host, ts), ts)
-        kind = event.get("event") or event.get("phase") or "scan"
+        kind = str(event.get("event") or event.get("phase") or "scan")
+        if kind not in KINDS:
+            unknown[kind] = unknown.get(kind, 0) + 1
+            continue
         if kind == "deploy":
-            deployed[host] = min(deployed.get(host, ts), ts)
+            # a host that deployed twice counts once, from its earliest deploy:
+            # the window opens when the implant first existed
+            deploys[host] = min(deploys.get(host, ts), ts)
         elif kind == "mine":
             if event.get("ok", True):
                 mined.add(host)
             else:
                 failed.add(host)
 
-    hosts = sorted(first)
+    hosts = sorted(last)
+    unknown_events = sorted(unknown)
+    hosts_not_deployed = [host for host in hosts if host not in deploys]
+
     checks: List[Check] = [
         Check(
             "dwell.data",
@@ -94,54 +136,105 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
             "dwell.hosts",
             PASS,
             "%d deployed, %d mined, %d failed of %d observed"
-            % (len(deployed), len(mined), len(failed), len(hosts)),
-            [Evidence("<ledger>", h, "deployed") for h in sorted(deployed)],
+            % (len(deploys), len(mined), len(failed), len(hosts)),
+            [Evidence("<ledger>", h, "deployed") for h in sorted(deploys)],
         )
     )
 
-    spans = [last[h] - first[h] for h in hosts if last[h] > first[h]]
+    if unknown:
+        checks.append(
+            Check(
+                "dwell.schema",
+                PARTIAL,
+                "%d event(s) have unrecognized kind; denominator may be wrong: %s"
+                % (sum(unknown.values()), ", ".join(sorted(unknown))),
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "dwell.schema",
+                PASS,
+                "every event carries one of the %d known kinds" % len(KINDS),
+            )
+        )
+
+    # a span runs from deploy to the last event seen for that host, whatever
+    # order the lines arrived in. A host whose last event is its deploy has no
+    # measured end, so it contributes no span rather than a fabricated zero
+    spans = [last[host] - start for host, start in deploys.items() if last[host] > start]
     if spans:
         checks.append(
             Check(
                 "dwell.span",
                 PASS,
-                "min=%d median=%d p90=%d max=%d over %d host(s)"
-                % (min(spans), _median(spans), _p90(spans), max(spans), len(spans)),
+                "min=%s median=%s p90=%d max=%d over %d host(s)"
+                % (
+                    _number(min(spans)),
+                    _number(_median(spans)),
+                    _p90(spans),
+                    max(spans),
+                    len(spans),
+                ),
             )
         )
     else:
         checks.append(Check("dwell.span", SKIP, "no host has two distinct timestamps"))
 
-    if not deployed:
+    pre = post = covered = 0
+    per_rule: Dict[str, int] = {}
+    hit_hosts = set()
+    unmatched: List[str] = []
+    for hit in hits:
+        host = str(hit["host"])
+        rule = str(hit.get("rule", "unknown"))
+        start = deploys.get(host)
+        if start is None:
+            # a hit on a host the ledger never deployed to cannot answer "of the
+            # hosts we deployed to, how many were seen". Naming it keeps the
+            # report from listing a rule count next to a zero.
+            if host not in unmatched:
+                unmatched.append(host)
+            continue
+        per_rule[rule] = per_rule.get(rule, 0) + 1
+        if int(hit["ts"]) < start:
+            # before the implant existed: this is a false positive and must not
+            # be allowed to raise the rate for the hosts that were really there
+            pre += 1
+            continue
+        post += 1
+        hit_hosts.add(host)
+    covered = len(hit_hosts)
+    denominator = len(deploys)
+    rate = 100.0 * covered / denominator if denominator else 0.0
+    all_hosts_rate = 100.0 * covered / len(hosts) if hosts and hits else None
+    none = denominator - covered
+
+    if not deploys:
         checks.append(
             Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
         )
         return Report(
             "dwell",
             checks,
-            {"ledger": ledger_path, "hosts": len(hosts), "verdict": "no-deployment"},
+            {
+                "ledger": ledger_path,
+                "hosts": len(hosts),
+                "deployed": 0,
+                "not_deployed": len(hosts),
+                "hosts_not_deployed": hosts_not_deployed,
+                "mined": len(mined),
+                "failed": len(failed),
+                "hits_pre_deploy": pre,
+                "hits_post_deploy": post,
+                "hit_rate": None,
+                "hit_rate_all_hosts": all_hosts_rate,
+                "hosts_without_hits": None,
+                "unknown_events": unknown_events,
+                "hits_unmatched": sorted(unmatched),
+                "verdict": "no-deployment",
+            },
         )
-
-    pre = post = covered = 0
-    per_rule: Dict[str, int] = {}
-    hit_hosts = set()
-    for hit in hits:
-        host = str(hit["host"])
-        rule = str(hit.get("rule", "unknown"))
-        per_rule[rule] = per_rule.get(rule, 0) + 1
-        if host in deployed:
-            hit_hosts.add(host)
-            if int(hit["ts"]) < deployed[host]:
-                pre += 1
-            else:
-                post += 1
-    covered = len(hit_hosts)
-    # the denominator is the hosts that actually hosted the implant: a host that
-    # was only scanned had nothing to detect, and counting it would let an
-    # operator flatter the rate by scanning more than it infected
-    denominator = len(deployed)
-    rate = 100.0 * covered / denominator if denominator else 0.0
-    none = denominator - covered
 
     if not hits:
         checks.append(
@@ -182,14 +275,20 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
         {
             "ledger": ledger_path,
             "hosts": len(hosts),
-            "deployed": len(deployed),
-            "not_deployed": len(hosts) - len(deployed),
+            "deployed": denominator,
+            "not_deployed": len(hosts) - denominator,
+            "hosts_not_deployed": hosts_not_deployed,
             "mined": len(mined),
             "failed": len(failed),
             "hits_pre_deploy": pre,
             "hits_post_deploy": post,
             "hit_rate": round(rate, 1),
+            "hit_rate_all_hosts": (
+                round(all_hosts_rate, 1) if all_hosts_rate is not None else None
+            ),
             "hosts_without_hits": none,
+            "unknown_events": unknown_events,
+            "hits_unmatched": sorted(unmatched),
             "verdict": verdict,
         },
     )

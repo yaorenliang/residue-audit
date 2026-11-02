@@ -5,6 +5,13 @@
 # call, and duplicating it here would just duplicate the bug). Measurement does
 # not: every number below is produced by stat(1), not by residue's Python.
 #
+# Two rules keep this honest:
+#   1. A residue run that cannot produce a report is a failure, not a zero.
+#      The previous version appended `|| true` and then compared 0 with 0,
+#      which turned a crashed checker into a green cross-check.
+#   2. The numbers are read as JSON, not scraped out of the pretty printer.
+#      Indentation is a presentation detail; a gate must not depend on it.
+#
 # Usage: tests/cross_check.sh ROOT
 
 set -eu
@@ -19,27 +26,53 @@ stat_ms() {
     fi
 }
 
-# residue exits non-zero when a check fails, which is exactly when we still
-# want its output, so the status is ignored on purpose
-json=$(python3 -m residue.cli trace "$root" --json || true)
+# residue exits 0..3 for its verdicts; 4 means the tool itself failed. Only the
+# second kind is fatal here, and the docs for that code path live in README.
+json=""
+status=0
+json=$(python3 -m residue.cli trace "$root" --json) || status=$?
+if [ "$status" -ge 4 ]; then
+    echo "CROSS_FAIL=residue exited $status" >&2
+    exit 1
+fi
+if [ -z "$json" ]; then
+    echo "CROSS_FAIL=residue produced no report" >&2
+    exit 1
+fi
 
-paths=$(printf '%s\n' "$json" \
-    | sed -n '/"field": "marker"/{n;p;}' \
-    | sed -n 's/.*"path": "\(.*\)",*/\1/p' \
-    | sed "s#<root>#${root}#")
+paths=$(printf '%s' "$json" | python3 -c '
+import json, sys
+report = json.load(sys.stdin)
+for check in report.get("checks", []):
+    for item in check.get("evidence", []):
+        if item.get("field") == "marker":
+            print(item["path"].replace("<root>", sys.argv[1]))
+' "$root")
+
+read_fact() {
+    printf '%s' "$json" | python3 -c '
+import json, sys
+report = json.load(sys.stdin)
+value = report.get("facts", {}).get(sys.argv[1])
+print("" if value is None else value)
+' "$1"
+}
 
 # membership tests below compare against a space-padded list: a newline
 # separated one would let every artifact be its own sibling
 members=" $(printf '%s' "$paths" | tr '\n' ' ') "
 
+# A sibling is a regular file in the same directory. Directories are not
+# siblings: their mtime moves whenever anything inside them is created, which
+# would let one new subdirectory vouch for every artifact next to it.
 aligned=0
 leaks=0
 for artifact in $paths; do
     mtime=$(stat_ms "$artifact")
     dir=$(dirname "$artifact")
     cap=0
-    for sibling in "$dir"/*; do
-        [ -f "$sibling" ] || continue
+    while IFS= read -r sibling; do
+        [ -n "$sibling" ] || continue
         case "$members" in
             *" $sibling "*) continue ;;
         esac
@@ -47,7 +80,9 @@ for artifact in $paths; do
         if [ "$value" -gt "$cap" ]; then
             cap=$value
         fi
-    done
+    done <<EOF
+$(find "$dir" -mindepth 1 -maxdepth 1 -type f ! -type l | sort)
+EOF
     if [ "$cap" -eq 0 ]; then
         continue  # no sibling to compare against; alignment is unmeasurable here
     fi
@@ -58,15 +93,20 @@ for artifact in $paths; do
     fi
 done
 
-their_aligned=$(printf '%s\n' "$json" | sed -n 's/.*"aligned": \([0-9]*\).*/\1/p' | head -1)
-their_leaks=$(printf '%s\n' "$json" | sed -n 's/.*"leaks": \([0-9]*\).*/\1/p' | head -1)
+their_aligned=$(read_fact aligned)
+their_leaks=$(read_fact leaks)
 
 echo "CROSS_ALIGNED=$aligned"
 echo "CROSS_LEAKS=$leaks"
-echo "RESIDUE_ALIGNED=${their_aligned:-0}"
-echo "RESIDUE_LEAKS=${their_leaks:-0}"
+echo "RESIDUE_ALIGNED=${their_aligned:--}"
+echo "RESIDUE_LEAKS=${their_leaks:--}"
 
-if [ "$aligned" = "${their_aligned:-0}" ] && [ "$leaks" = "${their_leaks:-0}" ]; then
+if [ -z "$their_aligned" ] || [ -z "$their_leaks" ]; then
+    echo "CROSS_FAIL=residue report has no counts" >&2
+    exit 1
+fi
+
+if [ "$aligned" = "$their_aligned" ] && [ "$leaks" = "$their_leaks" ]; then
     echo "CROSS_MATCH=1"
     exit 0
 fi

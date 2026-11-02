@@ -1,136 +1,197 @@
-"""Self-contained demo: build a throwaway tree, audit it, then break it.
+"""Self-contained demo: build throwaway trees, audit them, then break them.
 
 The demo exists so a reader can see a passing audit and the failing version of
-the same tree in under a second. It never touches anything outside the
-temporary directory it creates.
+the same tree in one run. It used to print four sections and return 0 no matter
+what they said, so a demo that had rotted into "everything fails" still looked
+green in CI. It now returns a real report: every section is a check, and the
+process exit code is the code of that report.
+
+What a synthetic tree cannot do is worth stating once: a directory's ctime is
+rewritten whenever an entry is created in it, and nothing in user space can move
+it backwards. So a tree written today always has a directory newer than the
+old mtimes its artifacts borrowed, and ``trace.directory_ctime`` says so. The
+best a synthetic tree can reach is partial, and section 2 shows exactly that.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
 import tempfile
-from typing import List
+from typing import Any, Dict, List, Optional
 
+from . import _fixtures
 from . import batch as batch_mod
 from . import dwell as dwell_mod
 from . import report as report_mod
 from . import stat_io
 from . import trace as trace_mod
-
-NEIGHBOUR_MS = 1609459200000  # 2021-01-01T00:00:00Z, deliberately old
-
-UNITS = {
-    "etc/systemd/system/zz-harvest.service": (
-        "[Unit]\nDescription=harvest\n[Service]\n"
-        "Restart=always\nKillSignal=SIGCONT\nSendSIGKILL=no\n"
-        "ExecStart=/usr/libexec/kworker --id x\n"
-    ),
-    "etc/systemd/system/zz-bridge.service": (
-        "[Unit]\nDescription=bridge\n[Service]\n"
-        "Restart=always\nKillSignal=SIGCONT\nSendSIGKILL=no\n"
-        "ExecStart=/usr/local/bin/bridge-client-x\n"
-    ),
-    "etc/cron.d/kworkers-updater": "*/17 * * * * root /usr/libexec/kworker --self-update\n",
-    "usr/libexec/kworker": "\x7fELF synthetic worker\nKillSignal=SIGCONT\n",
-    "usr/local/bin/bridge-client-x": "\x7fELF synthetic client\n",
-}
+from .model import FAIL, PASS, PARTIAL, Check, Report
 
 
-def build_tree(root: str, align: bool = True) -> List[str]:
-    """Create the synthetic artifact set, optionally borrowing sibling mtimes."""
-    for rel_dir in trace_mod.DEFAULT_SCAN:
-        os.makedirs(os.path.join(root, rel_dir), exist_ok=True)
-        for name in ("zzz-neighbour-a", "zzz-neighbour-b"):
-            path = os.path.join(root, rel_dir, name)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write("unrelated\n")
-            stat_io.set_mtime_ms(path, NEIGHBOUR_MS)
-    written = []
-    for rel, body in UNITS.items():
-        path = os.path.join(root, rel)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(body)
-        written.append(path)
-    if align:
-        # ours must be excluded from the cap, otherwise each artifact is its
-        # own newest neighbour and borrows its own fresh timestamp
-        ours = set(written)
-        for path in written:
-            stat_io.set_mtime_ms(path, stat_io.dir_cap_ms(os.path.dirname(path), ours)[0])
-    return written
+def _borrowed_tree(root: str) -> None:
+    """Artifacts written after the neighbours, carrying an old mtime.
+
+    This is what a real implant looks like: the file was created last, so the
+    inode order and the ctime both give it away even though the mtime was
+    borrowed from a neighbour.
+    """
+    _fixtures.make_dirs(root, trace_mod.DEFAULT_SCAN)
+    _fixtures.write_neighbours(root, trace_mod.DEFAULT_SCAN)
+    written = _fixtures.write_artifacts(root)
+    _fixtures.borrow_sibling_mtimes(written)
 
 
-LEDGER = [
-    {"ts": 1000, "host": "h1", "event": "scan"},
-    {"ts": 1005, "host": "h1", "event": "deploy"},
-    {"ts": 1180, "host": "h1", "event": "mine", "ok": True},
-    {"ts": 1010, "host": "h2", "event": "scan"},
-    {"ts": 1012, "host": "h2", "event": "deploy"},
-    {"ts": 1215, "host": "h2", "event": "mine", "ok": True},
-    {"ts": 1020, "host": "h3", "event": "deploy"},
-    {"ts": 1080, "host": "h3", "event": "mine", "ok": False},
-    {"ts": 1025, "host": "h4", "event": "deploy"},
-    {"ts": 1095, "host": "h4", "event": "mine", "ok": True},
-    {"ts": 1030, "host": "h5", "event": "scan"},
-]
+def _ordered_tree(root: str) -> None:
+    """Artifacts written first, neighbours after: the best a fake tree can do.
 
-HITS = [
-    {"ts": 1090, "host": "h1", "rule": "yara:generic-miner"},
-    {"ts": 1150, "host": "h3", "rule": "falco:systemd-drop"},
-]
+    The artifacts hold old mtimes and their ctime/inode order is older than the
+    neighbours, so alignment, freshness, ctime and order all pass. The holding
+    directories were still written today, which is what section 2 reports.
+    """
+    _fixtures.make_dirs(root, trace_mod.DEFAULT_SCAN)
+    written = _fixtures.write_artifacts(root)
+    for path in written:
+        stat_io.set_mtime_ms(path, _fixtures.NEIGHBOUR_MS)
+    _fixtures.write_neighbours(root, trace_mod.DEFAULT_SCAN)
 
 
-def _write_json(path: str, payload) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+def _coverage_ledger(tmp: str) -> str:
+    """Three of the four deployed hosts were seen: coverage, not luck."""
+    path = os.path.join(tmp, "ledger-covered.ndjson")
+    events = list(_fixtures.LEDGER)
+    events.append({"ts": 1040, "host": "h2", "event": "mine", "ok": False})
+    _fixtures.write_ledger(path, events)
+    return path
 
 
-def run(stdout=None) -> int:
+def _discordant_hits(tmp: str) -> str:
+    path = os.path.join(tmp, "hits-discordant.json")
+    _fixtures.write_hits(
+        path,
+        [
+            {"ts": 1090, "host": "h1", "rule": "yara:generic-miner"},
+            {"ts": 1150, "host": "h2", "rule": "falco:systemd-drop"},
+            {"ts": 1075, "host": "h4", "rule": "yara:elf-xor"},
+        ],
+    )
+    return path
+
+
+def run(stdout=None) -> Report:
+    """Print every section and return the report the entry point should exit on."""
     out = stdout or sys.stdout
     tmp = tempfile.mkdtemp(prefix="residue-demo-")
+    checks: List[Check] = []
+    facts: Dict[str, Any] = {"sections": [], "verdicts": {}}
     try:
-        clean_root = os.path.join(tmp, "clean")
-        os.makedirs(clean_root)
-        build_tree(clean_root, align=True)
-        dirty_root = os.path.join(tmp, "dirty")
-        os.makedirs(dirty_root)
-        build_tree(dirty_root, align=False)
+        def section(name: str, title: str, report: Report, note: str = "") -> None:
+            out.write("### %s. %s\n" % (name, title))
+            out.write(report_mod.as_text(report))
+            if note:
+                out.write(note)
+            out.write("\n")
+            worst = [c.name for c in report.checks if c.status == report.status()]
+            checks.append(
+                Check(
+                    "demo." + name,
+                    report.status(),
+                    "%s (%s)" % (title, ", ".join(worst[:3])),
+                )
+            )
+            facts["sections"].append(name)
+            facts["verdicts"][name] = report.status()
 
-        out.write("### 1. artifacts written, mtimes borrowed from siblings\n")
-        out.write(report_mod.as_text(trace_mod.run(clean_root)))
-        out.write(
-            "note: trace.order failing here is the point. utimensat rewrites a\n"
-            "      timestamp; nothing user-space can rewrite the inode number,\n"
-            "      so creation order stays recoverable. Depth has a floor.\n\n"
+        leak_root = os.path.join(tmp, "leak")
+        os.makedirs(leak_root)
+        _borrowed_tree(leak_root)
+        section(
+            "borrowed",
+            "artifacts written last, mtimes borrowed from a neighbour",
+            trace_mod.run(leak_root),
+            "note: order and ctime still fail here. utimensat rewrites a timestamp;\n"
+            "      nothing user-space can rewrite the inode number or the ctime.\n",
         )
 
-        out.write("### 2. same tree, written just now (negative control)\n")
-        out.write(report_mod.as_text(trace_mod.run(dirty_root)))
+        floor_root = os.path.join(tmp, "floor")
+        os.makedirs(floor_root)
+        _ordered_tree(floor_root)
+        section(
+            "floor",
+            "same artifacts written first: the floor for a synthetic tree",
+            trace_mod.run(floor_root),
+            "note: alignment, freshness, ctime and order pass. The holding\n"
+            "      directories were still created today, so directory_ctime stays\n"
+            "      partial: a ctime cannot be moved backwards. This is the floor.\n",
+        )
+
+        covered_ledger = _coverage_ledger(tmp)
+        section(
+            "covered",
+            "three of four deployed hosts were seen: coverage",
+            dwell_mod.run(covered_ledger, _discordant_hits(tmp)),
+        )
 
         ledger = os.path.join(tmp, "ledger.ndjson")
-        with open(ledger, "w", encoding="utf-8") as fh:
-            for event in LEDGER:
-                fh.write(json.dumps(event) + "\n")
+        _fixtures.write_ledger(ledger, _fixtures.LEDGER)
         hits = os.path.join(tmp, "hits.json")
-        _write_json(hits, HITS)
+        _fixtures.write_hits(hits, _fixtures.HITS)
+        section(
+            "half",
+            "two of four deployed hosts were seen: exactly half is not coverage",
+            dwell_mod.run(ledger, hits),
+        )
 
-        out.write("### 3. dwell and coverage: two of four hosts is not coverage\n")
-        out.write(report_mod.as_text(dwell_mod.run(ledger, hits)))
+        near = os.path.join(tmp, "near-a.json")
+        near_b = os.path.join(tmp, "near-b.json")
+        _fixtures.write_json(near, _fixtures.feature_set("build-a"))
+        _fixtures.write_json(near_b, _fixtures.feature_set("build-b", tail="feature-999"))
+        section(
+            "cluster",
+            "two builds one feature apart: they still cluster",
+            batch_mod.run([near, near_b]),
+        )
 
-        a = os.path.join(tmp, "a.json")
-        b = os.path.join(tmp, "b.json")
-        base = ["feature-%03d" % i for i in range(100)]
-        _write_json(a, {"name": "build-a", "features": base})
-        _write_json(b, {"name": "build-b", "features": base[:-1] + ["feature-999"]})
-        out.write("### 4. two builds, one feature apart: they still cluster\n")
-        out.write(report_mod.as_text(batch_mod.run([a, b])))
-        return 0
+        far = os.path.join(tmp, "far-a.json")
+        far_b = os.path.join(tmp, "far-b.json")
+        _fixtures.write_json(far, {"name": "build-c", "features": ["alpha", "beta", "gamma"]})
+        _fixtures.write_json(far_b, {"name": "build-d", "features": ["delta", "epsilon"]})
+        section(
+            "apart",
+            "two builds with nothing in common: they do not cluster",
+            batch_mod.run([far, far_b]),
+        )
+
+        wanted = {PASS, PARTIAL, FAIL}
+        seen = set(facts["verdicts"].values())
+        missing = sorted(wanted - seen)
+        if missing:
+            checks.append(
+                Check(
+                    "demo.sections",
+                    FAIL,
+                    "the demo no longer shows every verdict: missing %s" % (", ".join(missing),),
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "demo.sections",
+                    PASS,
+                    "%d section(s) show pass, partial and fail verdicts" % (len(facts["sections"]),),
+                )
+            )
+        return Report("demo", checks, facts)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def main(argv: Optional[List[str]] = None) -> int:
+    report = run(sys.stdout)
+    sys.stdout.write(report_mod.render(report, False))
+    return report.exit_code()
+
+
 if __name__ == "__main__":
-    raise SystemExit(run(sys.stdout))
+    raise SystemExit(main())

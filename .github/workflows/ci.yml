@@ -18,20 +18,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      # The old step asserted that the interpreter had no extra argv, which is
+      # true of every invocation and says nothing about the declaration. The
+      # contract lives in tests/test_packaging.py so it can fail.
       - name: zero dependencies
-        run: python -c "import sys; assert not [p for p in sys.argv[1:] if p], sys.argv"
+        run: python -m unittest tests.test_packaging -v
       - name: unit tests
         run: python -m unittest discover -s tests -t . -v
       - name: cross-check
         run: make cross
+      # The demo returns the verdict of the trees it builds, so its code is 0..3
+      # by design. Anything at or above 4 means the tool itself failed, and that
+      # is the only outcome worth failing the step over.
       - name: demo runs without touching the repository
         run: |
+          set +e
           before=$(git status --porcelain)
           python -m residue.demo > /dev/null
+          code=$?
           after=$(git status --porcelain)
+          set -e
+          test "$code" -lt 4
           test "$before" = "$after"
       - name: install and run the console script
         run: |
           pip install -e .
           residue --help
-          residue demo > /dev/null || true
+          residue --version
+          set +e
+          residue demo > /dev/null
+          code=$?
+          set -e
+          # No error swallowing: 4 means the entry point is broken, and that is
+          # the one code a demo must never produce.
+          test "$code" -lt 4

@@ -9,26 +9,17 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from residue import stat_io
+from residue._fixtures import ARTIFACTS, NEIGHBOUR_MS, write_json, write_ledger
 
-OLD_MS = 1609459200000  # 2021-01-01T00:00:00Z
+# The artifact set and the "old timestamp" both live in the package now, because
+# the demo needs them too, and two copies of a fixture drift silently. What stays
+# here is what only the tests use: the ledger variants below, and a plant() that
+# can leave neighbours out.
+OLD_MS = NEIGHBOUR_MS
 LATER_MS = OLD_MS + 86_400_000 * 365  # a year later, still in the past
-
-ARTIFACTS = {
-    "etc/systemd/system/zz-harvest.service": (
-        "[Unit]\nDescription=harvest\n[Service]\n"
-        "Restart=always\nKillSignal=SIGCONT\nSendSIGKILL=no\n"
-        "ExecStart=/usr/libexec/kworker --id x\n"
-    ),
-    "etc/systemd/system/zz-bridge.service": (
-        "[Service]\nRestart=always\nKillSignal=SIGCONT\n"
-        "ExecStart=/usr/local/bin/bridge-client-x\n"
-    ),
-    "etc/cron.d/kworkers-updater": "*/17 * * * * root /usr/libexec/kworker --self-update\n",
-    "usr/libexec/kworker": "\x7fELF synthetic worker\nKillSignal=SIGCONT\n",
-    "usr/local/bin/bridge-client-x": "\x7fELF synthetic client\n",
-}
 
 DIRS = (
     "etc/systemd/system",
@@ -49,6 +40,10 @@ def plant(root: str, neighbours: bool = True, align: bool = True, only=None):
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("unrelated\n")
             stat_io.set_mtime_ms(path, OLD_MS)
+    if neighbours:
+        # ctime cannot be set, so the order of the writes is the only way to make
+        # "installed after the neighbours" a reproducible fact instead of a tie
+        time.sleep(0.01)
     written = []
     for rel, body in ARTIFACTS.items():
         if only is not None and rel not in only:
@@ -61,23 +56,14 @@ def plant(root: str, neighbours: bool = True, align: bool = True, only=None):
     if align:
         ours = set(written)
         for path in written:
-            cap, _ = stat_io.dir_cap_ms(os.path.dirname(path), ours)
+            cap, _cap_ctime, _count = stat_io.dir_cap_ms(os.path.dirname(path), ours)
             if cap:
                 stat_io.set_mtime_ms(path, cap)
     return written
 
 
-def write_json(path: str, payload) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-
-
-def write_ledger(path: str, events) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        for event in events:
-            fh.write(json.dumps(event) + "\n")
-
-
+# A second ledger shape: here h4 is only scanned, so the denominator is not
+# "every host observed". The variant stays local because no demo shows it.
 LEDGER = [
     {"ts": 1000, "host": "h1", "event": "scan"},
     {"ts": 1005, "host": "h1", "event": "deploy"},
