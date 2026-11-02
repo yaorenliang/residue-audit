@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import os
+from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 MS = 1_000_000
@@ -49,17 +50,29 @@ def _collect(errors: Optional[List[StatError]], err: Optional[StatError]) -> Non
         errors.append(err)
 
 
-def mtime_ms(path: str) -> int:
-    return os.lstat(path).st_mtime_ns // MS
+@dataclass(frozen=True)
+class Stat:
+    """The three stamps one lstat answers, so they cannot describe two files."""
+
+    mtime_ms: int
+    ctime_ms: int
+    ino: int
 
 
-def ctime_ms(path: str) -> int:
-    """Status-change time. Unlike mtime this cannot be set by user space."""
-    return os.lstat(path).st_ctime_ns // MS
+def stat_of(path: str) -> Tuple[Optional[Stat], Optional[StatError]]:
+    """One lstat: the stamps of that file, or the error that stopped us.
 
-
-def ino(path: str) -> int:
-    return os.lstat(path).st_ino
+    Three readers meant three lstats, so a file replaced between them produced an
+    inode that never belonged to the mtime beside it - a comparison of two
+    different objects that still looks like an answer. Reading them together also
+    removes the excuse to catch one failure and keep the two values already in
+    hand: a half-read file is not data.
+    """
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        return None, stat_error(path, "stat", exc)
+    return Stat(info.st_mtime_ns // MS, info.st_ctime_ns // MS, info.st_ino), None
 
 
 def set_mtime_ms(path: str, value_ms: int) -> None:
@@ -179,29 +192,14 @@ def dir_stats(
         full = os.path.join(path, name)
         if os.path.normpath(full) in norm_ours:
             continue
-        try:
-            value = mtime_ms(full)
-            changed = ctime_ms(full)
-            number = ino(full)
-        except OSError as exc:
-            _collect(errors, stat_error(full, "stat", exc))
+        info, err = stat_of(full)
+        if info is None:
+            _collect(errors, err)
             continue
         count += 1
-        cap = max(cap, value)
-        cap_ctime = max(cap_ctime, changed)
-        max_ino = max(max_ino, number)
+        cap = max(cap, info.mtime_ms)
+        cap_ctime = max(cap_ctime, info.ctime_ms)
+        max_ino = max(max_ino, info.ino)
     return cap, cap_ctime, max_ino, count
 
 
-def dir_cap_ms(
-    path: str,
-    ours: Optional[set] = None,
-    errors: Optional[List[StatError]] = None,
-) -> Tuple[int, int, int]:
-    """(newest sibling mtime, newest sibling ctime, sibling count).
-
-    Returns zeros when the directory has no corroborating sibling: an empty
-    directory cannot tell us what "old" looks like.
-    """
-    cap, cap_ctime, _max_ino, count = dir_stats(path, ours, errors)
-    return cap, cap_ctime, count

@@ -280,12 +280,21 @@ class Scanner:
         that artifact claims to exist. That is a change we can date, not a verdict
         about who made it, so it is reported as partial.
         """
-        try:
-            changed = stat_io.ctime_ms(directory)
-            oldest = min(stat_io.mtime_ms(path) for path in paths)
-        except OSError as exc:
-            self._record(stat_io.stat_error(directory, "stat", exc))
+        info, err = stat_io.stat_of(directory)
+        if info is None:
+            self._record(err)
             return None
+        oldest: Optional[int] = None
+        for path in paths:
+            held, held_err = stat_io.stat_of(path)
+            if held is None:
+                # Name the path that failed, not the directory that happened to
+                # be stat'ed first: an unreadable path must not be reported under
+                # a name we could read.
+                self._record(held_err)
+                return None
+            oldest = held.mtime_ms if oldest is None else min(oldest, held.mtime_ms)
+        changed = info.ctime_ms
         if changed > oldest + DIRECTORY_CTIME_SLACK_MS:
             return (changed, oldest)
         return None
@@ -344,37 +353,31 @@ class Scanner:
                 uncorroborated.extend(paths)
                 evidence.append(Evidence(shown, "neighbours", "0"))
                 for path in paths:
-                    try:
-                        if (now_ms - stat_io.mtime_ms(path)) // 1000 <= self.fresh_window_s:
-                            fresh.append(path)
-                    except OSError as exc:
-                        self._record(stat_io.stat_error(path, "stat", exc))
+                    info, err = stat_io.stat_of(path)
+                    if info is None:
+                        self._record(err)
+                        continue
+                    if (now_ms - info.mtime_ms) // 1000 <= self.fresh_window_s:
+                        fresh.append(path)
                 continue
             for path in paths:
-                try:
-                    value = stat_io.mtime_ms(path)
-                except OSError as exc:
-                    self._record(stat_io.stat_error(path, "stat", exc))
+                info, err = stat_io.stat_of(path)
+                if info is None:
+                    self._record(err)
                     continue
-                if (now_ms - value) // 1000 <= self.fresh_window_s:
+                if (now_ms - info.mtime_ms) // 1000 <= self.fresh_window_s:
                     fresh.append(path)
-                if value > cap:
+                if info.mtime_ms > cap:
                     unaligned.append(path)
                     evidence.append(
-                        Evidence(sanitize(path, self.root), "mtime_ms", str(value))
+                        Evidence(sanitize(path, self.root), "mtime_ms", str(info.mtime_ms))
                     )
                 else:
                     aligned.append(path)
-                try:
-                    if stat_io.ino(path) > max_ino:
-                        order_hits.append(path)
-                except OSError as exc:
-                    self._record(stat_io.stat_error(path, "stat", exc))
-                try:
-                    if stat_io.ctime_ms(path) > cap_ctime:
-                        ctime_hits.append(path)
-                except OSError as exc:
-                    self._record(stat_io.stat_error(path, "stat", exc))
+                if info.ino > max_ino:
+                    order_hits.append(path)
+                if info.ctime_ms > cap_ctime:
+                    ctime_hits.append(path)
             evidence.append(
                 Evidence(shown, "neighbour_cap_ms", str(cap))
             )

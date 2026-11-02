@@ -201,7 +201,9 @@ class TraceADomainControls(unittest.TestCase):
         stat_io.set_mtime_ms(sibling, fx.OLD_MS)
 
         status, _ = self._status(root, now_ms=fx.LATER_MS)
-        self.assertLess(stat_io.ctime_ms(target), stat_io.ctime_ms(sibling))
+        self.assertLess(
+            stat_io.stat_of(target)[0].ctime_ms, stat_io.stat_of(sibling)[0].ctime_ms
+        )
         self.assertEqual(status["trace.ctime"], PASS)
 
     # -- F-04: the holding directory's own stamp ---------------------------

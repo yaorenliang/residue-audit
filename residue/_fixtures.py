@@ -87,7 +87,7 @@ def borrow_sibling_mtimes(paths, extra_ours: Optional[List[str]] = None) -> None
     """
     ours = set(paths) | set(extra_ours or [])
     for path in paths:
-        cap = stat_io.dir_cap_ms(os.path.dirname(path), ours)[0]
+        cap = stat_io.dir_stats(os.path.dirname(path), ours)[0]
         if cap:
             stat_io.set_mtime_ms(path, cap)
 

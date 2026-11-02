@@ -30,12 +30,33 @@ class TempDirTest(unittest.TestCase):
         return path
 
 
+class StatOfTest(TempDirTest):
+    def test_one_call_answers_all_three_stamps(self):
+        path = self.write("file")
+        info, err = stat_io.stat_of(path)
+        self.assertIsNone(err)
+        self.assertEqual(info.mtime_ms, os.lstat(path).st_mtime_ns // stat_io.MS)
+        self.assertEqual(info.ctime_ms, os.lstat(path).st_ctime_ns // stat_io.MS)
+        self.assertEqual(info.ino, os.lstat(path).st_ino)
+
+    def test_a_missing_path_returns_the_error_not_a_zero(self):
+        info, err = stat_io.stat_of(os.path.join(self.tmp, "nope"))
+        self.assertIsNone(info)
+        self.assertEqual((err.op, err.err), ("stat", "No such file or directory"))
+        self.assertTrue(err.path.endswith("nope"))
+
+
 class SetMtimeTest(TempDirTest):
     def test_f15_set_mtime_keeps_millisecond_precision(self):
         path = self.write("file")
         wanted = OLD_MS + 123
         stat_io.set_mtime_ms(path, wanted)
-        self.assertEqual(stat_io.mtime_ms(path), wanted)
+        info, err = stat_io.stat_of(path)
+        self.assertIsNone(err)
+        self.assertEqual(info.mtime_ms, wanted)
+        self.assertGreater(info.ino, 0)
+        with self.assertRaises(AttributeError):
+            info.mtime_ms = 0
 
     def test_f15_a_nonsense_mtime_is_refused_not_guessed(self):
         path = self.write("file")
@@ -114,12 +135,14 @@ class DirStatsTest(TempDirTest):
         self.assertEqual(count, 1)
         self.assertEqual(cap, OLD_MS)
 
-    def test_dir_cap_ms_keeps_the_three_value_shape(self):
-        self.write("a", "1")
-        cap, cap_ctime, count = stat_io.dir_cap_ms(self.tmp)
-        self.assertEqual(count, 1)
-        self.assertGreaterEqual(cap, OLD_MS)
-        self.assertGreaterEqual(cap_ctime, cap)
+    def test_the_three_stamp_readers_are_gone(self):
+        # Three readers meant three lstats, and the caller could catch one error
+        # and keep the two values it already had. One reader, one answer.
+        for name in ("mtime_ms", "ctime_ms", "ino", "dir_cap_ms"):
+            self.assertFalse(hasattr(stat_io, name), name)
+        cap, cap_ctime, _max_ino, count = stat_io.dir_stats(self.tmp)
+        self.assertEqual(count, 0)
+        self.assertEqual((cap, cap_ctime), (0, 0))
 
 
 class WalkFilesTest(TempDirTest):

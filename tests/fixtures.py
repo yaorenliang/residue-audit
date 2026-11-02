@@ -56,7 +56,7 @@ def plant(root: str, neighbours: bool = True, align: bool = True, only=None):
     if align:
         ours = set(written)
         for path in written:
-            cap, _cap_ctime, _count = stat_io.dir_cap_ms(os.path.dirname(path), ours)
+            cap = stat_io.dir_stats(os.path.dirname(path), ours)[0]
             if cap:
                 stat_io.set_mtime_ms(path, cap)
     return written
