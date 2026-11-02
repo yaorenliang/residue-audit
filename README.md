@@ -49,6 +49,22 @@ prints the three verdicts above plus two counter-examples — an unaligned tree 
 must fail, and a detection ledger where exactly half the hosts were covered (which
 is not a majority, and the tool says so).
 
+## What it says on a real host
+
+The lab boots a stock Ubuntu 24.04 root with no egress and audits it twice.
+
+**Identification.** A rule of the shape "any binary named by any unit" claimed 13
+files on that root, 5 of them ours — 38% precision, because `packagekitd`,
+`boltd`, `qmi-proxy` and five more are legitimately started by legitimately
+installed units. Anchoring the rule on a marker-bearing unit and following
+`ExecStart=` outward gives 5 claims, 0 false positives, and 18 files reported as
+weak claims (not audited). `--broad` restores the old rule if you would rather
+over-claim than miss.
+
+**The floor.** The scoped run aligns 5 of 5 artifacts and leaks none — and still
+fails, on `ctime` and `order`. That is not a bug in the fixture. It is the
+answer to "how deep can this go", and it comes with a number.
+
 ## Three questions
 
 ### 1. Did the artifacts actually blend in? — `residue trace`
@@ -142,7 +158,7 @@ short version:
 make test     # 15 unit tests: golden contracts + negative controls
 make cross    # L3: recompute the same numbers with stat(1)
 make verify   # both
-make lab      # L2: the same fixtures on a real ext4 guest, no egress, ~90s after first boot
+make lab      # L2: the same fixtures on a real ext4 guest, no egress
 ```
 
 Four layers, and the last two are the ones that matter:
