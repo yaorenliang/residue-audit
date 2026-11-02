@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "residue-audit"
+version = "0.0.0"
+description = "Measure what a hidden implant leaves behind: filesystem residue, dwell-time coverage, cross-build similarity."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ray Yao" }]
+keywords = ["dfir", "forensics", "anti-forensics", "incident-response", "threat-detection"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+
+[project.scripts]
+residue = "residue.cli:main"
+
+[tool.setuptools]
+packages = ["residue"]
