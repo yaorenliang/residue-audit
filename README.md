@@ -8,24 +8,83 @@ One is that the implant was never there. The other is that it was there,
 and the way we looked could not have seen it. This project measures the distance.
 
 ```
-$ residue trace /mnt/image
-trace.artifacts     pass     5 artifact(s) matched the marker set
-trace.aligned       pass     all 5 artifact(s) are no newer than a sibling
-trace.corroborated  pass     every directory holding an artifact also holds a non-artifact sibling
-trace.ctime         fail     5 artifact(s) have a ctime newer than every sibling:
-                             mtime can be borrowed, ctime cannot
-trace.fresh         pass     no artifact carries an mtime within 120s of now
-trace.order         fail     5 artifact(s) have a higher inode than every sibling,
-                             so creation order is recoverable
+$ residue demo    # section 1 of 6
+### borrowed. artifacts written last, mtimes borrowed from a neighbour
+trace.artifacts        pass     5 artifact(s) matched the marker set
+                                  <root>/etc/cron.d/kworkers-updater marker=content:kworker
+                                  <root>/etc/systemd/system/zz-bridge.service marker=unit:marker
+                                  <root>/etc/systemd/system/zz-harvest.service marker=unit:marker
+                                  <root>/usr/libexec/kworker marker=marker:KillSignal=SIGCONT
+                                  <root>/usr/local/bin/bridge-client-x marker=unit:execstart
+trace.aligned          pass     all 5 artifact(s) are no newer than a sibling
+                                  <root>/etc/cron.d neighbour_cap_ms=1609459200000
+                                  <root>/etc/systemd/system neighbour_cap_ms=1609459200000
+                                  <root>/usr/libexec neighbour_cap_ms=1609459200000
+                                  <root>/usr/local/bin neighbour_cap_ms=1609459200000
+trace.corroborated     pass     every directory holding an artifact also holds a non-artifact sibling
+trace.ctime            fail     5 artifact(s) have a ctime newer than every sibling: mtime can be borrowed, ctime cannot
+                                  <root>/etc/cron.d/kworkers-updater ctime_vs_cap=newer
+                                  <root>/etc/systemd/system/zz-bridge.service ctime_vs_cap=newer
+                                  <root>/etc/systemd/system/zz-harvest.service ctime_vs_cap=newer
+                                  <root>/usr/libexec/kworker ctime_vs_cap=newer
+                                  <root>/usr/local/bin/bridge-client-x ctime_vs_cap=newer
+trace.directory_ctime  partial  4 holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent
+                                  <root>/etc/cron.d dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
+                                  <root>/etc/systemd/system dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
+                                  <root>/usr/libexec dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
+                                  <root>/usr/local/bin dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
+trace.fresh            pass     no artifact carries an mtime within 120s of now
+trace.order            fail     5 artifact(s) have a higher inode than every sibling, so creation order is recoverable
+                                  <root>/etc/cron.d/kworkers-updater inode_order=newest
+                                  <root>/etc/systemd/system/zz-bridge.service inode_order=newest
+                                  <root>/etc/systemd/system/zz-harvest.service inode_order=newest
+                                  <root>/usr/libexec/kworker inode_order=newest
+                                  <root>/usr/local/bin/bridge-client-x inode_order=newest
+trace.readable         pass     every scanned path was read; no verdict rests on a skipped path
+
+aligned=5
+artifacts=5
+ctime=5
+errors=[]
+fresh=0
+leaks=0
+order=5
+root=/var/folders/x9/ftfjbsxx70s1_15hm5lfmvjm0000gn/T/residue-demo-x1hisjkl/leak
+scan=["etc/systemd/system", "etc/cron.d", "usr/libexec", "usr/local/bin"]
+truncated_files=0
+uncorroborated=0
+weak_claims=0
 
 summary command=trace status=fail exit=2
+note: order and ctime still fail here. utimensat rewrites a timestamp;
+      nothing user-space can rewrite the inode number or the ctime.
 ```
+
+`make docs-sample` prints the six demo sections this README quotes (the block above
+is section 1) plus the `--json` shape, so the text can be diffed instead of trusted. `<root>` is the
+throwaway tree the demo builds under `$TMPDIR`; the absolute timestamps in
+`directory_ctime` come from that run's clock.
 
 That implant did everything a careful operator does. It borrowed timestamps from
 its neighbours, it landed in directories that already had company, and it stayed
-out of the last two minutes of history. It is still visible in two places, because
-a timestamp can be rewritten and a creation order cannot, and because changing an
-mtime moves a ctime that nobody can put back.
+out of the last two minutes of history. It is still visible in three places: a
+timestamp can be rewritten and a creation order cannot; changing an mtime moves a
+ctime that nobody can put back; and the directory holding the file was touched
+after the file was dated.
+
+### What the exit code means
+
+| code | meaning | what a gate should do |
+|---|---|---|
+| 0 | `pass` | the checks that ran found nothing |
+| 1 | `partial` | something is unmeasurable, not clean |
+| 2 | `fail` | at least one check found residue |
+| 3 | `skip` | nothing matched; the audit did not happen |
+| 4 | tool failure | bad usage, unreadable input, or a crash - never a verdict |
+
+4 exists because 1 and 2 are verdicts. Before the code space was split, a mistyped
+flag (argparse's 2) and an uncaught exception (Python's 1) read as "found residue"
+and "unmeasurable", so a gate written as `if exit == 2` fired on a typo.
 
 So the question is not "can we detect it". The question is where the hiding stops
 working, and how somebody else checks that claim without trusting this code.
@@ -39,9 +98,12 @@ make demo
 ```
 
 Zero dependencies, Python 3.9+. No network, no root, no writes outside the paths
-you point it at. The demo builds a throwaway tree, plants a synthetic artifact set,
-prints the three verdicts above, and adds two counter-examples: an unaligned tree
-that must fail, and a ledger where exactly half the hosts were covered.
+you point it at. The demo builds throwaway trees and prints six sections: the
+borrowed-mtime tree above, the best a synthetic tree can reach (alignment, ctime
+and order pass; the holding directory still dates the assembly), a coverage run
+that passes, a ledger where exactly half the hosts were covered, two builds that
+cluster, and two that do not. It shows all three verdicts and **exits on them**, so
+a demo that rots into "everything fails" is a red build instead of a screenshot.
 
 ## What it says on a real host
 
@@ -57,8 +119,12 @@ the rule on a marker-bearing unit and following `ExecStart=` outward gives 5 cla
 `--broad` restores the old rule if you would rather over-claim than miss.
 
 **The floor.** The scoped run aligns 5 of 5 artifacts and leaks none. It still fails,
-on `ctime` and `order`. That is not a fixture bug. It is the answer to "how deep
-can this go", and it comes with numbers.
+on `ctime` and `order`, and reports `partial` on `directory_ctime`. That is not a
+fixture bug. It is the answer to "how deep can this go", and it comes with numbers.
+
+13 = 5 claimed + 8 weak, so 5/13 = 38% precision for the broad rule. The lab prints
+`LAB_ROOT_OURS=5` and `LAB_ROOT_WEAK=8` in `out/lab-console.log`; the arithmetic is
+one line because a reader should never have to take a percentage on faith.
 
 ## Three questions
 
@@ -99,6 +165,15 @@ three rules that exist because the naive rate is wrong.
 * Exactly half is not a majority. `> 50.0` passes, `50.0` is
   `partial-coverage`, and no hits supplied is `unknown, not zero`. Zero is a
   measurement; not looking is not.
+* The other denominator is still reported. `hit_rate_all_hosts` answers "of every
+  host we observed", so a reader can see how far the two rates diverge instead of
+  being handed the flattering one.
+* An event kind outside `{deploy, mine, scan}` is named, not absorbed. An upstream
+  vocabulary change would otherwise shrink the denominator quietly, and every rate
+  computed from a shrinking denominator goes up: `unknown_events` plus a
+  `dwell.schema` partial.
+* A hit on a host the ledger never deployed to is listed in `hits_unmatched`
+  instead of being dropped while its rule count keeps printing.
 
 ### 3. Can one signature cluster two builds? `residue batch`
 
@@ -107,6 +182,7 @@ similarity against a threshold. The interesting case is not "different", it is
 "almost the same": a pair at 0.99 looks distinct to a human comparing two file lists
 and identical to a clusterer. The band between `threshold - 0.02` and the threshold
 is reported as `partial` on purpose, because one more build flips the verdict there.
+`--threshold` moves the line; say which one you used, because it changes the verdict.
 
 ## How I got here
 
@@ -152,9 +228,14 @@ The short version:
 
 * **Memory is invisible here.** The file behind `/proc/<pid>/exe` stays readable
   after deletion, and nothing under `/proc` is read.
-* **Directories are not checked yet.** Writing a file updates the parent directory's
-  mtime and ctime, and ctime cannot be set. This is the most likely way the tool
-  returns `pass` on a host a human would call dirty. Known gap, written down.
+* **Directory timestamps are a signal, not a proof.** `trace.directory_ctime` reports
+  `partial` when a holding directory changed after the artifacts inside it were dated:
+  it dates the assembly, not the intent, so it cannot stand alone as a finding. A
+  package upgrade touches the same directory.
+* **Unreadable paths are reported, not counted as empty.** A directory the tool
+  cannot list lands in `facts.errors` and downgrades `trace.readable` to `partial`.
+  Before this existed, `chmod 000` on a scanned directory made the audit return
+  "nothing to audit" with no mention of the failure.
 * **`ctime` proves the file changed after its neighbours**, not who changed it.
   A package upgrade leaves the same signal.
 * **Inode order is a floor.** Reuse after deletion blunts it.
@@ -167,20 +248,22 @@ The short version:
 ## Verify it yourself
 
 ```bash
-make test     # 16 unit tests: golden contracts and negative controls
+make test     # unit tests: golden contracts and negative controls
 make cross    # L3: recompute the same counts with stat(1)
-make verify   # both
+make cov      # line coverage, stdlib only, floor enforced by the Makefile
+make verify   # all three
 make lab      # L2: the same fixtures on a real ext4 guest, no egress
 ```
 
-Four layers. The last two are the ones that matter.
+Four layers, plus a floor. The middle two are the ones that matter.
 
 | layer | what it proves | how |
 |---|---|---|
 | L0 | the verdict is what we said it is | fixture to golden JSON, field by field |
-| L1 | each check can fail | a negative input per check that must not pass |
+| L1 | each check can fail | a negative input that must not pass: 8 checks, 8 negative controls, plus one case for a recognized-but-unreadable path |
 | L2 | the claim holds on ext4, not only on macOS temp dirs | QEMU guest, `-netdev user,restrict=on` |
 | L3 | the number survives a different implementation | shell and `stat(1)` recompute, diffed against ours |
+| floor | the suite covers what it claims | `make cov` fails under the floor set in the Makefile |
 
 Without L1, "it passed" means "it was not tested". Without L3, "recomputed" means
 "the same program said the same thing twice".

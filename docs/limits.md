@@ -21,13 +21,23 @@ resident.
 in the journal. If the artifact was removed before you mounted, the file is gone from
 this view and the checks below it have nothing to say.
 
-**It does not see the directory.** Creating a file updates its parent directory's
-mtime, and no user-space trick avoids that write. The parent has a ctime too, and
-ctime cannot be set. A careful responder runs `stat /etc/systemd/system` and sees a
-directory that changed at 03:14 while every file inside claims to be from 2019.
-`trace` reports directory caps as neighbour evidence but does **not** yet raise a
-check on directory ctime. That gap is known, and it is the most likely way this tool
-returns `pass` on a host that a human would call dirty.
+**It sees the holding directory, and only as a lead.** Creating a file updates its
+parent directory's mtime, and no user-space trick avoids that write. The parent has a
+ctime too, and ctime cannot be set. A careful responder runs
+`stat /etc/systemd/system` and sees a directory that changed at 03:14 while every
+file inside claims to be from 2019. `trace.directory_ctime` compares that directory
+timestamp against the oldest artifact inside it and reports `partial` when the
+directory is newer. It stays `partial` and never becomes `fail` for a reason: a
+package upgrade touches the same directory in the same order. The check dates the
+assembly, not the intent.
+
+**An unreadable path is a named gap, not an empty directory.** A directory the tool
+cannot list lands in `facts.errors`, the artifacts behind it are not measured, and
+`trace.readable` drops to `partial`. This limit is listed here because the
+failure mode it replaced was invisible: `chmod 000` on a scanned directory used to
+produce "nothing to audit" with no indication that anything had been skipped. If
+`trace.readable` is not `pass`, the counts below it describe a smaller tree than
+the one you pointed at.
 
 **ctime is evidence of change, not of malice.** ctime cannot be backdated, so an
 artifact whose ctime is newer than every sibling was written after its neighbours.
@@ -69,7 +79,7 @@ event was not written to the ledger, the tool treats that host as never deployed
 every rate it computes inherits the omission. The percentage is only as good as the
 input.
 
-**Coverage is coverage by the rules you supplied.** `--detections` is a file of hit
+**Coverage is coverage by the rules you supplied.** `--hits` is a file of hit
 events. The rate answers "of the hosts we deployed to, how many produced at least one
 of these hits". It is not a statement about the detection stack's real recall, and it
 cannot be, because nobody handed the tool the rules that did not fire.
@@ -77,6 +87,19 @@ cannot be, because nobody handed the tool the rules that did not fire.
 **Pre/post depends on clock agreement.** The boundary is each host's own `deploy`
 timestamp. Hosts with skewed clocks will misclassify hits near the boundary. This
 tool does not correct skew.
+
+**An unknown event kind shrinks the denominator, and the tool says so rather than
+guessing.** Anything outside `{deploy, mine, scan}` is listed in `unknown_events`
+and raises a `dwell.schema` partial. If your ledger uses a kind this version does
+not know (`install`, `exploit`, `removed`), the coverage number is computed over
+the hosts it did understand - read `hit_rate_all_hosts` next to it, and treat a
+partial schema as "this denominator may be wrong" rather than "this rate is low".
+
+**Hits on hosts that were never deployed are listed, not scored.** They appear in
+`hits_unmatched`. A hit for an unknown host can mean a ledger with a missing
+`deploy` row or a hit file built against a different fleet; either way it cannot
+enter the coverage rate, and dropping it silently would leave its rule printed with a
+count that no longer explains anything.
 
 **Spans measure presence, not activity.** A span runs from deploy to the last event
 seen for that host. Absence of later events is not proof that the implant stopped. It
@@ -98,6 +121,18 @@ can carry it.
 **The threshold is a convention, not a law.** 0.98 comes from reproducing a result
 in the field: two builds of the same family at 0.96 to 0.98 were still clustered by
 hand. Change the threshold and you change the verdict, so say which one you used.
+
+**An empty feature set has no similarity at all.** Two empty sets are `skip`, not
+`fail`: the ratio is undefined, and reporting 1.0 (the old behaviour) claimed the
+two builds were identical when in fact neither extraction produced anything. One
+empty set against a non-empty one is a genuine 0.0 and is scored.
+
+## Exit codes
+
+`0` pass, `1` partial, `2` fail, `3` skip, `4` tool failure. Four is not a
+verdict: it means the tool could not run its checks (bad flag, unreadable input, a
+crash). A gate that treats 4 as "something found" will page somebody for a typo, and
+a gate that treats 4 as "clean" is worse. Check the code before the summary line.
 
 ## Platform
 

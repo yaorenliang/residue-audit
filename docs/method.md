@@ -1,6 +1,6 @@
 # Method
 
-Three checks, one stance: **recompute, never self-report.**
+Eight checks across three commands, one stance: **recompute, never self-report.**
 
 A measurement is worth something only if someone else can reproduce it without
 trusting the program that produced it. Everything below is written so that a second
@@ -13,7 +13,7 @@ second implementation can be a shell script, a different language, or a person w
 An implant that drops files leaves two kinds of residue: the files themselves, and
 the shape of their metadata relative to everything around them. `trace` reads a
 root directory (a mounted image, a live host, a fixture tree) and answers three
-separable questions.
+separable questions, then reports how deep the floors go.
 
 **1. Alignment.** For every artifact, compare its mtime against the newest sibling
 in the same directory that is not ours. If the artifact is newer than every
@@ -32,10 +32,23 @@ written ninety seconds ago, an artifact that is "no newer than its siblings" is
 still obviously part of the same burst. Freshness compares against the wall clock,
 not against the directory.
 
-A fourth question, creation **order**, is reported but rarely passes. Most
+**4. Creation order** is reported but rarely passes. Most
 filesystems allocate inode numbers monotonically, so the file written last has the
 highest inode, and no user-space call changes that. It is a floor on how deeply a
 delivery can hide, and the tool prints the floor instead of hiding it.
+
+**5. The holding directory.** Writing a file updates its parent's mtime and ctime,
+and neither can be set back from user space. Comparing the directory's ctime with
+the oldest artifact mtime inside it dates the *assembly*: the directory changed
+after the files it holds were dated. This is reported as `partial` and not `fail`,
+because the same signal comes from a package upgrade touching the directory, and a
+check that cannot distinguish those two is a lead, not a finding.
+
+**6. Readability.** Every scanned path is either read or named. A directory that
+cannot be listed lands in `facts.errors`, the artifacts behind it are not counted,
+and `trace.readable` drops to `partial`. Without this the tool's failure mode was
+the worst available one: an unreadable directory looked exactly like an empty one,
+so `chmod 000` turned a blind spot into a clean result.
 
 ### Identification versus measurement
 
@@ -87,10 +100,29 @@ The coverage rate has two rules that exist because the naive version is wrong:
   before the implant exists is a false positive, and folding it into the same rate
   makes the stack look better than it is.
 
+Three more rules, each of which exists because the honest number is the
+unflattering one:
+
+* **Two denominators, both printed.** `hit_rate` uses the deployed hosts;
+  `hit_rate_all_hosts` uses every host in the ledger. Reporting only the first lets
+  a reader mistake "half the deployed hosts" for "half the fleet"; reporting only the
+  second mixes hosts that had nothing to detect into the denominator.
+* **An unknown event kind is named, not absorbed.** Anything outside
+  `{deploy, mine, scan}` goes into `unknown_events` and raises a `dwell.schema`
+  partial. Folding it into `scan` would silently shrink the denominator, and every
+  rate over a shrinking denominator goes up.
+* **A hit on an undeployed host is listed.** It lands in `hits_unmatched` instead of
+  being dropped while its rule keeps printing a count in the evidence block.
+
 And one rule about language: exactly half is not a majority. `rate > 50.0` passes;
 50.0 is `partial-coverage`. If no hits were supplied at all, coverage is `skip`
 with the reason `unknown, not zero`, because zero is a measurement and not looking
 is not.
+
+The distribution is a distribution: the median is the true median (the mean of the
+two middle spans for an even count, not the upper one), and p90 uses nearest-rank.
+A span starts at the earliest `deploy` for that host, not at the first line in the
+file, so re-sorting a ledger cannot change the answer.
 
 ## batch: can one signature cluster two builds?
 
@@ -104,7 +136,33 @@ band between `threshold - 0.02` and `threshold` is reported as `partial` on
 purpose. Near the line, one more build decides the verdict, and a pass there is a
 coin flip reported as a fact.
 
-## The four layers of verification
+Two empty feature sets are `skip`, not `fail`. Jaccard similarity is undefined
+when the denominator is zero, and two sets that share nothing because neither build
+extracted anything is not evidence of difference. The pair is reported with
+`min_similarity=None` so it cannot quietly enter a minimum computed from other
+pairs.
+
+## The exit code is part of the contract
+
+| code | meaning |
+|---|---|
+| 0 | `pass` |
+| 1 | `partial`: something is unmeasurable |
+| 2 | `fail`: a check found residue |
+| 3 | `skip`: nothing matched, the audit did not happen |
+| 4 | tool failure: bad usage, unreadable input, or a crash |
+
+Verdicts and failures share one enum and never share a value. Before that split,
+argparse exited 2 on a mistyped flag and Python exits 1 on an uncaught exception, so
+a gate written as `exit == 2` fired on a typo and `exit == 1` read a crash as
+"unmeasurable". A gate that cannot tell "found something" from "ran wrong" is not a
+gate.
+
+## The four layers of verification, and a floor
+
+There is a fifth gate underneath the four: `make cov` fails under a line-coverage
+floor declared in the Makefile, so a suite that stops exercising a module is red
+instead of quiet.
 
 ```
 L0  contract      fixture -> golden JSON, compared field by field
