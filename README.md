@@ -57,7 +57,7 @@ The lab boots a stock Ubuntu 24.04 root with no egress and audits it twice.
 files on that root, 5 of them ours — 38% precision, because `packagekitd`,
 `boltd`, `qmi-proxy` and five more are legitimately started by legitimately
 installed units. Anchoring the rule on a marker-bearing unit and following
-`ExecStart=` outward gives 5 claims, 0 false positives, and 18 files reported as
+`ExecStart=` outward gives 5 claims, 0 false positives, and 8 files reported as
 weak claims (not audited). `--broad` restores the old rule if you would rather
 over-claim than miss.
 

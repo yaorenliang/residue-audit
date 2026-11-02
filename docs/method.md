@@ -58,7 +58,7 @@ units. On a live host that is not a small error: it turns system binaries into
 findings.
 
 Anchoring on the marker instead gives 5 claims and 0 false positives on the same
-root, at a cost: 18 files that the broad rule would have claimed are now reported as
+root, at a cost: 8 files that the broad rule would have claimed are now reported as
 **weak claims** and are not audited at all. That trade is stated in the output
 (`(+​8 weak claim(s) not audited)`) rather than hidden. `--broad` restores the old
 rule for the cases where a responder would rather over-claim than miss.
