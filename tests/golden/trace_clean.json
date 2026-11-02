@@ -1,0 +1,133 @@
+{
+  "checks": [
+    {
+      "evidence": [
+        {
+          "field": "marker",
+          "path": "<root>/etc/cron.d/kworkers-updater",
+          "value": "content:kworker"
+        },
+        {
+          "field": "marker",
+          "path": "<root>/etc/systemd/system/zz-bridge.service",
+          "value": "unit:marker"
+        },
+        {
+          "field": "marker",
+          "path": "<root>/etc/systemd/system/zz-harvest.service",
+          "value": "unit:marker"
+        },
+        {
+          "field": "marker",
+          "path": "<root>/usr/libexec/kworker",
+          "value": "marker:KillSignal=SIGCONT"
+        },
+        {
+          "field": "marker",
+          "path": "<root>/usr/local/bin/bridge-client-x",
+          "value": "unit:execstart"
+        }
+      ],
+      "name": "trace.artifacts",
+      "status": "pass",
+      "why": "5 artifact(s) matched the marker set (+8 weak claim(s) not audited)"
+    },
+    {
+      "evidence": [
+        {
+          "field": "neighbour_cap_ms",
+          "path": "<root>/etc/cron.d",
+          "value": "1609459200000"
+        },
+        {
+          "field": "neighbour_cap_ms",
+          "path": "<root>/etc/systemd/system",
+          "value": "1609459200000"
+        },
+        {
+          "field": "neighbour_cap_ms",
+          "path": "<root>/usr/libexec",
+          "value": "1609459200000"
+        },
+        {
+          "field": "neighbour_cap_ms",
+          "path": "<root>/usr/local/bin",
+          "value": "1609459200000"
+        }
+      ],
+      "name": "trace.aligned",
+      "status": "pass",
+      "why": "all 5 artifact(s) are no newer than a sibling"
+    },
+    {
+      "evidence": [],
+      "name": "trace.corroborated",
+      "status": "pass",
+      "why": "every directory holding an artifact also holds a non-artifact sibling"
+    },
+    {
+      "evidence": [
+        {
+          "field": "ctime_vs_cap",
+          "path": "<root>/etc/cron.d/kworkers-updater",
+          "value": "newer"
+        },
+        {
+          "field": "ctime_vs_cap",
+          "path": "<root>/etc/systemd/system/zz-bridge.service",
+          "value": "newer"
+        },
+        {
+          "field": "ctime_vs_cap",
+          "path": "<root>/etc/systemd/system/zz-harvest.service",
+          "value": "newer"
+        },
+        {
+          "field": "ctime_vs_cap",
+          "path": "<root>/usr/libexec/kworker",
+          "value": "newer"
+        },
+        {
+          "field": "ctime_vs_cap",
+          "path": "<root>/usr/local/bin/bridge-client-x",
+          "value": "newer"
+        }
+      ],
+      "name": "trace.ctime",
+      "status": "fail",
+      "why": "5 artifact(s) have a ctime newer than every sibling: mtime can be borrowed, ctime cannot"
+    },
+    {
+      "evidence": [],
+      "name": "trace.fresh",
+      "status": "pass",
+      "why": "no artifact carries an mtime within 120s of now"
+    },
+    {
+      "evidence": [],
+      "name": "trace.order",
+      "status": "fail",
+      "why": "5 artifact(s) have a higher inode than every sibling, so creation order is recoverable"
+    }
+  ],
+  "command": "trace",
+  "exit_code": 2,
+  "facts": {
+    "aligned": 5,
+    "artifacts": 5,
+    "ctime": 5,
+    "fresh": 0,
+    "leaks": 0,
+    "order": 5,
+    "root": "<root>",
+    "scan": [
+      "etc/systemd/system",
+      "etc/cron.d",
+      "usr/libexec",
+      "usr/local/bin"
+    ],
+    "uncorroborated": 0,
+    "weak_claims": 8
+  },
+  "status": "fail"
+}

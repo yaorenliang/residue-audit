@@ -1,0 +1,69 @@
+#cloud-config
+# No egress: qemu is started with -netdev user,restrict=on. Everything the guest
+# needs arrives through a read-only 9p mount of the host repository.
+#
+# The guest runs the audit three times:
+#   1. on /            - a stock Ubuntu root, to measure how often the
+#                        identification heuristic claims a file that is not ours
+#   2. on /opt/labroot - the planted set, the scoped run that must pass
+#   3. on /opt/labroot - the same set written just now, which must not pass
+runcmd:
+  - mkdir -p /mnt/repo
+  - mount -t 9p -o trans=virtio,version=9p2000.L repo /mnt/repo
+  - |
+      echo "LAB_GUEST_READY=1"
+      if mount | grep -q " /mnt/repo "; then echo "LAB_MOUNT=1"; else echo "LAB_MOUNT=0"; fi
+      python3 - <<PY
+      import socket
+      s = socket.socket()
+      s.settimeout(3)
+      print("LAB_EGRESS=%d" % s.connect_ex(("1.1.1.1", 443)))
+      PY
+      cd /mnt/repo
+
+      # 1. stock root: the planted five plus whatever else the heuristic claims
+      sh lab/synthetic_implant.sh /
+      python3 -m residue.cli trace / --json > /tmp/root.json || true
+      python3 - <<PY
+      import json, os
+      d = json.load(open("/tmp/root.json"))
+      f = d["facts"]
+      ours = set("/etc/systemd/system/zz-harvest.service /etc/systemd/system/zz-bridge.service "
+                 "/etc/cron.d/kworkers-updater /usr/libexec/kworker /usr/local/bin/bridge-client-x".split())
+      claimed = [e["path"].replace("<root>", "") for c in d["checks"]
+                 if c["name"] == "trace.artifacts" for e in c["evidence"]]
+      foreign = [p for p in claimed if p not in ours]
+      print("LAB_ROOT_ARTIFACTS=%d" % f["artifacts"])
+      print("LAB_ROOT_OURS=%d" % len([p for p in claimed if p in ours]))
+      print("LAB_ROOT_FOREIGN=%d" % len(foreign))
+      print("LAB_ROOT_WEAK=%d" % f.get("weak_claims", -1))
+      for p in foreign[:12]:
+          print("LAB_ROOT_FOREIGN_PATH=%s" % p)
+      PY
+
+      # 2. scoped root: write the same five alone, then audit
+      sh lab/synthetic_implant.sh /opt/labroot
+      python3 -m residue.cli trace /opt/labroot --json > /tmp/aligned.json || true
+      python3 - <<PY
+      import json
+      d = json.load(open("/tmp/aligned.json"))
+      f = d["facts"]
+      print("LAB_ALIGNED=%d" % f["aligned"])
+      print("LAB_LEAKS=%d" % f["leaks"])
+      print("LAB_ARTIFACTS=%d" % f["artifacts"])
+      print("LAB_CTIME=%d" % f.get("ctime", -1))
+      print("LAB_ORDER=%d" % f.get("order", -1))
+      print("LAB_VERDICT=%s" % d["status"])
+      PY
+
+      # 3. negative control: same files, written now, must not pass
+      sh lab/synthetic_implant.sh /opt/labroot --no-align
+      python3 -m residue.cli trace /opt/labroot --json > /tmp/dirty.json || true
+      python3 - <<PY
+      import json
+      d = json.load(open("/tmp/dirty.json"))
+      f = d["facts"]
+      print("LAB_NEG_LEAKS=%d" % f["leaks"])
+      print("LAB_NEG_VERDICT=%s" % d["status"])
+      PY
+      echo "LAB_DONE=1"
