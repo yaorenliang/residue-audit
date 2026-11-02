@@ -1,4 +1,4 @@
-# v0.1.0 — first measurement release
+# v0.1.0: first measurement release
 
 **What this release is.** Three checks that recompute how well a hidden implant
 hid, and the machinery to prove the recomputation is not self-attestation.
@@ -35,7 +35,7 @@ against a host; every subcommand reads a path or a JSON file and returns a verdi
 * It does not read memory, `/proc`, deleted inodes, or any filesystem state that
   is not on disk right now.
 * It does not check directory ctime. Writing a file updates the parent directory's
-  mtime and ctime, and ctime cannot be set — this is the most likely way the tool
+  mtime and ctime, and ctime cannot be set. This is the most likely way the tool
   returns `pass` on a dirty host. Documented in `docs/limits.md`.
 * `ctime` proves the file changed after its siblings, not that an attacker changed it.
 * Inode order is a floor: reuse after deletion blunts it.
