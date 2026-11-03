@@ -220,7 +220,7 @@ Windows 侧的工具链、磁盘层时间篡改的公开论文。驻留时间到
 ```bash
 make test     # 单测：golden 契约 + 负控
 make cross    # L3：用 stat(1) 把同一批数字重算一遍
-make cov      # 行覆盖率，只用标准库，地板写在 Makefile 里
+make cov      # 行覆盖率，只用标准库，总额与模块两级地板
 make verify   # 上面三项
 make lab      # L2：同一套夹具在真实 ext4 客机里，无外网
 ```
@@ -233,7 +233,7 @@ make lab      # L2：同一套夹具在真实 ext4 客机里，无外网
 | L1 | 这条检查有能力失败 | 每条检查配一个必须不通过的输入：8 条检查、8 个负控，另加一例「认得出但读不进去」 |
 | L2 | 结论在 ext4 上成立，不只在 macOS 临时目录里成立 | QEMU 客机，`-netdev user,restrict=on` |
 | L3 | 数字经得起另一种实现 | shell + `stat(1)` 重算，与我们的结果对差 |
-| 地板 | 测试覆盖了它声称覆盖的东西 | `make cov` 低于 Makefile 里的地板就红 |
+| 地板 | 测试覆盖了它声称覆盖的东西 | `make cov` 低于总额地板就红；任一模块比 `tests/coverage_baseline.json` 记录值低 2 个点以上也红 |
 
 没有 L1，「通过」等于「没测」；没有 L3，「复算过」等于「同一个程序说了两遍同样的话」。
 

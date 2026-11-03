@@ -1,5 +1,6 @@
 PY ?= python3
 COVERAGE_FLOOR ?= 88
+MODULE_FLOOR ?= 2
 
 .PHONY: all demo test cross cov verify docs-sample lab clean
 
@@ -18,10 +19,13 @@ cross:
 	echo "== aligned =="; sh tests/cross_check.sh "$$tmp/aligned"; \
 	echo "== dirty =="; sh tests/cross_check.sh "$$tmp/dirty"
 
-# Coverage needs no dependency: the runner uses the stdlib trace module. The
-# floor is a number in this file, so a drop is a red gate instead of a surprise.
+# Coverage needs no dependency: the runner uses the stdlib trace module. Two floors:
+# the total in this file, and, per module, the recorded value in
+# tests/coverage_baseline.json minus MODULE_FLOOR points. A deleted test file moves
+# the total by a little and one module by a lot, so the second floor is the one that
+# notices.
 cov:
-	$(PY) tests/coverage.py --min $(COVERAGE_FLOOR)
+	$(PY) tests/coverage.py --min $(COVERAGE_FLOOR) --module-floor $(MODULE_FLOOR)
 
 verify: test cross cov
 	@echo "VERIFY_OK"

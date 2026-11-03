@@ -257,7 +257,7 @@ The short version:
 ```bash
 make test     # unit tests: golden contracts and negative controls
 make cross    # L3: recompute the same counts with stat(1)
-make cov      # line coverage, stdlib only, floor enforced by the Makefile
+make cov      # line coverage, stdlib only, total and per-module floors
 make verify   # all three
 make lab      # L2: the same fixtures on a real ext4 guest, no egress
 ```
@@ -270,7 +270,7 @@ Four layers, plus a floor. The middle two are the ones that matter.
 | L1 | each check can fail | a negative input that must not pass: 8 checks, 8 negative controls, plus one case for a recognized-but-unreadable path |
 | L2 | the claim holds on ext4, not only on macOS temp dirs | QEMU guest, `-netdev user,restrict=on` |
 | L3 | the number survives a different implementation | shell and `stat(1)` recompute, diffed against ours |
-| floor | the suite covers what it claims | `make cov` fails under the floor set in the Makefile |
+| floor | the suite covers what it claims | `make cov` fails under the total floor, and under any module more than 2 points below `tests/coverage_baseline.json` |
 
 Without L1, "it passed" means "it was not tested". Without L3, "recomputed" means
 "the same program said the same thing twice".

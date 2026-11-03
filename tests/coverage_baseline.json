@@ -1,0 +1,17 @@
+{
+  "modules": {
+    "__init__.py": 100.0,
+    "__main__.py": 100.0,
+    "_fixtures.py": 94.8,
+    "batch.py": 89.5,
+    "cli.py": 91.0,
+    "demo.py": 90.4,
+    "dwell.py": 96.5,
+    "inside.py": 85.1,
+    "model.py": 93.2,
+    "report.py": 93.3,
+    "stat_io.py": 80.3,
+    "trace.py": 90.8
+  },
+  "total": 90.6
+}

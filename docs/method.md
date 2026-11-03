@@ -160,9 +160,15 @@ gate.
 
 ## The four layers of verification, and a floor
 
-There is a fifth gate underneath the four: `make cov` fails under a line-coverage
-floor declared in the Makefile, so a suite that stops exercising a module is red
-instead of quiet.
+There is a fifth gate underneath the four: `make cov` fails under two floors, so a
+suite that stops exercising a module is red instead of quiet. The total may not fall
+below `COVERAGE_FLOOR`, and no module may fall more than `MODULE_FLOOR` points below
+the value recorded in `tests/coverage_baseline.json`. The second half exists because
+the total hides a deletion: dropping `tests/test_dwell.py` left the total at 88.2%
+while `dwell.py` fell from 96.5% to 83.0%. Coverage is measured with the stdlib
+tracer, and the entry point is measured in a child process, because a tracer cannot
+follow a subprocess: `residue/__main__.py` used to print 0/4 for a module the entry
+tests prove is executed.
 
 ```
 L0  contract      fixture -> golden JSON, compared field by field

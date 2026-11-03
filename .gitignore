@@ -11,3 +11,4 @@ out/
 .DS_Store
 lab/*.qcow2
 lab/seed*.iso
+*.cover
