@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from typing import Dict, List, Optional
 
-from .model import FAIL, PASS, PARTIAL, SKIP, Check, Evidence, Report
+from .model import PASS, PARTIAL, SKIP, Check, Evidence, Report
 
 # the only kinds this module can interpret; anything else is reported, not guessed
 KINDS = frozenset(("deploy", "mine", "scan"))
