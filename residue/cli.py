@@ -166,12 +166,27 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_walkable(root: str) -> None:
+    """Refuse a root we cannot enumerate, instead of reporting an empty host.
+
+    isdir() answers a different question: it needs execute on the parents and nothing
+    from the directory itself, so a root at chmod 000 passes the check and every scan
+    below it reads as "not there" - zero artifacts, no errors, and a readable check
+    that claims every scanned path was read. Listing once turns that into the tool
+    failure the exit table promises.
+    """
+    if not os.path.isdir(root):
+        raise ToolError("root %r is not a directory" % (root,))
+    try:
+        with os.scandir(root) as entries:
+            next(iter(entries), None)
+    except OSError as exc:
+        raise ToolError("root %r cannot be read: %s" % (root, exc.strerror or exc))
+
+
 def _dispatch(args: argparse.Namespace) -> Any:
     if args.command == "trace":
-        if not os.path.isdir(args.root):
-            # The walker reports what it read, and a missing root reads exactly
-            # like an empty one: zero artifacts, clean host. Say it instead.
-            raise ToolError("root %r is not a directory" % (args.root,))
+        _require_walkable(args.root)
         return trace_mod.run(
             args.root,
             scan=args.scan,

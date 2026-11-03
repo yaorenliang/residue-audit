@@ -419,13 +419,35 @@ def _readable_path(scratch: _Scratch, path: str) -> Optional[str]:
     return real
 
 
+def _entry_path(scratch: _Scratch, path: str) -> Tuple[Optional[str], Optional[str]]:
+    """The host path of the entry itself: parent resolved inside the image, name kept.
+
+    Stamping the resolved path is what made an enabled unit invisible: systemd writes
+    /etc/systemd/system/x.wants/y.service -> /lib/systemd/system/y.service, resolve()
+    hands back the target, and the link that ls -lt prints first is measured by the
+    mtime of a unit written two years ago. The last component therefore stays
+    unexpanded - only the directories above it are resolved, so a link in the middle
+    of the path still means "inside this image".
+    """
+    parent, name = os.path.split(path)
+    real_parent, why = inside.resolve(scratch.root, parent or scratch.root)
+    if real_parent is None:
+        return None, why
+    return os.path.join(real_parent, name), None
+
+
 def _stamp(scratch: _Scratch) -> Tuple[ArtifactObs, ...]:
     """Read every claim's stamps once, and report the ones we could not read."""
     out: List[ArtifactObs] = []
     for path in sorted(scratch.claims):
-        real = _readable_path(scratch, path)
-        stamp, err = (None, None) if real is None else stat_io.stat_of(real)
-        if stamp is None and err is not None:
+        # readable accounting stays on the resolved path: a link that leaves the box
+        # is a named gap, not a silent one.
+        _readable_path(scratch, path)
+        entry, why = _entry_path(scratch, path)
+        stamp, err = (None, None) if entry is None else stat_io.stat_of(entry)
+        if entry is None:
+            _record(scratch, stat_io.StatError(path, "resolve", why or "unresolvable link"))
+        elif stamp is None and err is not None:
             _record(scratch, err)
         out.append(ArtifactObs(path, sanitize(path, scratch.root), scratch.claims[path], stamp))
     return tuple(out)
@@ -902,4 +924,4 @@ def run(
         now_ms=now_ms,
         broad=broad,
     )
-    return Report("trace", checks(obs), facts(obs))
+    return Report("trace", checks(obs), facts(obs), primary="trace.artifacts")

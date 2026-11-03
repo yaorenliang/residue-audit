@@ -381,4 +381,5 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
         _span_check(spans),
         _coverage_check(coverage),
     ]
-    return Report("dwell", checks, _facts(ledger_path, tally, hosts, coverage))
+    return Report("dwell", checks, _facts(ledger_path, tally, hosts, coverage),
+                  primary="dwell.coverage")

@@ -453,5 +453,20 @@ class DwellCaliberTest(unittest.TestCase):
         self.assertEqual(dwell.load_hits(empty), [])
 
 
+class TheSpanLineStaysReadable(unittest.TestCase):
+    """A span is a number of minutes, and it prints as one.
+
+    `_number` exists so the span line reads 125 instead of 125.0; the other
+    branch - a span that really has a fraction - had nothing behind it, so
+    dropping it left every integer test green.
+    """
+
+    def test_a_fractional_span_keeps_its_fraction(self):
+        self.assertEqual(dwell._number(122.5), "122.5")
+
+    def test_a_whole_span_drops_the_trailing_zero(self):
+        self.assertEqual(dwell._number(125.0), "125")
+
+
 if __name__ == "__main__":
     unittest.main()

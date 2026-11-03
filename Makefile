@@ -7,7 +7,7 @@ MODULE_FLOOR ?= 2
 all: verify
 
 demo:
-	$(PY) -m residue.demo
+	$(PY) -m residue.demo || test $$? -eq 2
 
 test:
 	$(PY) -m unittest discover -s tests -t . -v

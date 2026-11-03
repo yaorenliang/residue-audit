@@ -10,6 +10,7 @@ translation that quietly drops a section is how the two drift apart.
 """
 
 import json
+import subprocess
 import os
 import re
 import unittest
@@ -192,3 +193,15 @@ class DocsSample(unittest.TestCase):
     def test_the_translated_quote_is_the_same_output(self):
         want = [line.rstrip() for line in readme_sample.sample().splitlines()][1:]
         self.assertEqual(self.block("README.zh-CN.md"), want, "the zh README quotes a different sample")
+
+class MakefileDemoRuns(unittest.TestCase):
+    """README:99-102 tells a new reader to clone and run make demo: that must not fail."""
+
+    def test_make_demo_exits_zero(self):
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(["make", "demo"], cwd=repo, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=120)
+        text = proc.stdout.decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 0, text[-2000:])
+        self.assertIn("summary command=demo", text)
+        self.assertIn("status=fail", text)

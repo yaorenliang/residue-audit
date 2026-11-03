@@ -1,0 +1,83 @@
+# Mutation equivalents: mutants that cannot change anything a reader or caller can observe.
+# Format: residue/<file>:<line><TAB><reason>. Each line is a claim, not a dismissal:
+# when the reason does not hold, the mutant has to be killed by a test instead.
+# The survivor list comes from tools/mutate.py; every entry names one line of residue/*.py.
+
+residue/__main__.py:1	a docstring carries no behaviour: nothing reads it at runtime
+residue/_fixtures.py:45	a docstring carries no behaviour: nothing reads it at runtime
+residue/_fixtures.py:58	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/_fixtures.py:116	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/_fixtures.py:122	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/_fixtures.py:127	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/batch.py:65	a docstring carries no behaviour: nothing reads it at runtime
+residue/cli.py:40	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/cli.py:169	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/cli.py:182	the default of next() is only reached for an empty directory, and the value is discarded
+residue/cli.py:208	a docstring carries no behaviour: nothing reads it at runtime
+residue/demo.py:34	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/demo.py:52	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/demo.py:59	write_artifacts creates every parent directory it needs; the pinned demo output is byte-identical without this call
+residue/demo.py:67	a docstring carries no behaviour: nothing reads it at runtime
+residue/demo.py:101	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/demo.py:119	the tree writer creates this directory itself; the pinned demo output is byte-identical without this call
+residue/demo.py:130	the tree writer creates this directory itself; the pinned demo output is byte-identical without this call
+residue/demo.py:199	ignore_errors only hides a failure while removing the temporary tree, after the report is built
+residue/dwell.py:91	a docstring carries no behaviour: nothing reads it at runtime
+residue/dwell.py:97	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/dwell.py:99	a docstring carries no behaviour: nothing reads it at runtime
+residue/dwell.py:109	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/dwell.py:152	the function falls off the end anyway, which returns None
+residue/dwell.py:168	KINDS does not contain None, so the second operand already catches a missing kind
+residue/dwell.py:173	KINDS does not contain the unknown kind, so the deploy and mine branches below cannot match it
+residue/inside.py:29	a docstring carries no behaviour: nothing reads it at runtime
+residue/inside.py:30	every caller passes os.path.abspath(root), which carries no trailing separator
+residue/inside.py:37	a docstring carries no behaviour: nothing reads it at runtime
+residue/inside.py:38	_parts is only called with a root that resolve() already made absolute
+residue/inside.py:75	basename(root_abs) is empty only for root '/', where no path can fail the membership test
+residue/inside.py:82	os.path.abspath collapses '..' before the walk, so this branch cannot be reached
+residue/inside.py:99	basename(root_abs) is empty only for root '/', where no path can fail the membership test
+residue/inside.py:117	a docstring carries no behaviour: nothing reads it at runtime
+residue/model.py:30	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/model.py:32	a docstring carries no behaviour: nothing reads it at runtime
+residue/model.py:49	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/report.py:1	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:31	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:42	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:50	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/stat_io.py:51	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:58	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:67	a docstring carries no behaviour: nothing reads it at runtime
+residue/stat_io.py:90	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/stat_io.py:157	when resolve() succeeds the target is inside the image, so opening the link's own path reaches the same inode
+residue/stat_io.py:182	stat_of never reports a missing stat without an error: the two are set together
+residue/trace.py:51	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:115	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/trace.py:117	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:125	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/trace.py:127	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:139	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/trace.py:157	frozen=True is a promise about assignment: no code assigns to these instances or hashes them
+residue/trace.py:159	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:176	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:191	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/trace.py:192	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:222	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:237	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:253	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/trace.py:326	the function falls off the end anyway, which returns None
+residue/trace.py:355	the function falls off the end anyway, which returns None
+residue/trace.py:370	a return annotation is not enforced at runtime: nothing calls get_type_hints
+residue/trace.py:371	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:436	the caller reads the second value only when the first is None, which returns above
+residue/trace.py:440	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:448	entry is None only from the return above, so this branch is decided before the line
+residue/trace.py:450	stat_of pairs a missing stamp with an error, so 'and' and 'or' select the same branch
+residue/trace.py:480	the function falls off the end anyway, which returns None
+residue/trace.py:490	the function falls off the end anyway, which returns None
+residue/trace.py:556	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:603	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:692	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:752	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:814	a docstring carries no behaviour: nothing reads it at runtime
+residue/trace.py:447	_entry_path returns (entry, why); why is only read when entry is None, and this return hands back a real entry
+residue/_fixtures.py:82	-> True is the return annotation; a type annotation is not evaluated and the body does not read it

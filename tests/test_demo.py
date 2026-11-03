@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 from residue import cli, demo, report as report_mod
+from tests import readme_sample
 from residue.model import ERROR, EXIT, FAIL, PASS, PARTIAL
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,6 +148,42 @@ class DemoSecondEntryPointFailsLoud(unittest.TestCase):
         self.assertEqual(proc.returncode, EXIT[ERROR], proc.stderr)
         self.assertIn("residue: error: RuntimeError: boom", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
+
+
+class TheWholeDemoIsPinned(unittest.TestCase):
+    """Every section, not just the one the README quotes.
+
+    Section 1 already has a byte-for-byte sample, and that is the only section
+    anything read: a fixture flag or a deleted line could change what sections
+    2-6 reported while the suite stayed green. This pins the run - six sections
+    plus the demo's own summary - against a golden file, normalising only the
+    throwaway paths and the wall-clock directory stamps.
+    """
+
+    def test_the_whole_run_matches_the_golden_sample(self):
+        path = os.path.join(REPO, "tests", "golden", "demo.txt")
+        if os.environ.get("UPDATE_GOLDEN"):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(readme_sample.whole() + "\n")
+        with open(path, encoding="utf-8") as handle:
+            want = handle.read().rstrip("\n")
+        got = readme_sample.whole()
+        # a diff of the first mismatch is far more useful than "177 lines differ"
+        self.assertEqual(got.splitlines(), want.splitlines())
+
+    def test_the_golden_file_is_the_one_the_tool_prints(self):
+        # the file is generated, so it must not be edited by hand into something
+        # the tool no longer prints: regenerating it twice has to be a no-op
+        self.assertEqual(readme_sample.whole(), readme_sample.whole())
+
+
+class DemoMainIsItsReport(unittest.TestCase):
+    def test_main_returns_the_exit_code_of_the_report_it_printed(self):
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            code = demo.main()
+        self.assertEqual(code, 2)  # borrowed tree fails alignment
+        self.assertIn("summary command=demo status=fail exit=2", out.getvalue())
 
 
 if __name__ == "__main__":

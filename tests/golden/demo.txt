@@ -1,0 +1,193 @@
+$ residue demo
+### borrowed. artifacts written last, mtimes borrowed from a neighbour
+trace.artifacts        pass     5 artifact(s) matched the marker set
+                                  <root>/etc/cron.d/kworkers-updater marker=content:kworker
+                                  <root>/etc/systemd/system/zz-bridge.service marker=unit:marker
+                                  <root>/etc/systemd/system/zz-harvest.service marker=unit:marker
+                                  <root>/usr/libexec/kworker marker=marker:KillSignal=SIGCONT
+                                  <root>/usr/local/bin/bridge-client-x marker=unit:execstart
+trace.aligned          pass     all 5 artifact(s) are no newer than a sibling
+                                  <root>/etc/cron.d neighbour_cap_ms=1609459200000
+                                  <root>/etc/systemd/system neighbour_cap_ms=1609459200000
+                                  <root>/usr/libexec neighbour_cap_ms=1609459200000
+                                  <root>/usr/local/bin neighbour_cap_ms=1609459200000
+trace.corroborated     pass     every directory holding an artifact also holds a non-artifact sibling
+trace.ctime            fail     5 artifact(s) have a ctime newer than every sibling: mtime can be borrowed, ctime cannot
+                                  <root>/etc/cron.d/kworkers-updater ctime_vs_cap=newer
+                                  <root>/etc/systemd/system/zz-bridge.service ctime_vs_cap=newer
+                                  <root>/etc/systemd/system/zz-harvest.service ctime_vs_cap=newer
+                                  <root>/usr/libexec/kworker ctime_vs_cap=newer
+                                  <root>/usr/local/bin/bridge-client-x ctime_vs_cap=newer
+trace.directory_ctime  partial  4 holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent
+                                  <root>/etc/cron.d dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/etc/systemd/system dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/libexec dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/local/bin dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+trace.fresh            pass     no artifact carries an mtime within 120s of now
+trace.order            fail     5 artifact(s) have a higher inode than every sibling, so creation order is recoverable
+                                  <root>/etc/cron.d/kworkers-updater inode_order=newest
+                                  <root>/etc/systemd/system/zz-bridge.service inode_order=newest
+                                  <root>/etc/systemd/system/zz-harvest.service inode_order=newest
+                                  <root>/usr/libexec/kworker inode_order=newest
+                                  <root>/usr/local/bin/bridge-client-x inode_order=newest
+trace.readable         pass     every scanned path was read; no verdict rests on a skipped path
+
+absolute_links=0
+aligned=5
+artifacts=5
+ctime=5
+errors=[]
+fresh=0
+leaks=0
+order=5
+root=<path>
+scan=["etc/systemd/system", "etc/cron.d", "usr/libexec", "usr/local/bin"]
+truncated_files=0
+uncorroborated=0
+weak_claims=0
+weak_paths=[]
+
+summary command=trace status=fail exit=2
+note: order and ctime still fail here. utimensat rewrites a timestamp;
+      nothing user-space can rewrite the inode number or the ctime.
+
+### floor. same artifacts written first: the floor for a synthetic tree
+trace.artifacts        pass     5 artifact(s) matched the marker set
+                                  <root>/etc/cron.d/kworkers-updater marker=content:kworker
+                                  <root>/etc/systemd/system/zz-bridge.service marker=unit:marker
+                                  <root>/etc/systemd/system/zz-harvest.service marker=unit:marker
+                                  <root>/usr/libexec/kworker marker=marker:KillSignal=SIGCONT
+                                  <root>/usr/local/bin/bridge-client-x marker=unit:execstart
+trace.aligned          pass     all 5 artifact(s) are no newer than a sibling
+                                  <root>/etc/cron.d neighbour_cap_ms=1609459200000
+                                  <root>/etc/systemd/system neighbour_cap_ms=1609459200000
+                                  <root>/usr/libexec neighbour_cap_ms=1609459200000
+                                  <root>/usr/local/bin neighbour_cap_ms=1609459200000
+trace.corroborated     pass     every directory holding an artifact also holds a non-artifact sibling
+trace.ctime            pass     no artifact has a ctime above every sibling in its directory
+trace.directory_ctime  partial  4 holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent
+                                  <root>/etc/cron.d dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/etc/systemd/system dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/libexec dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/local/bin dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+trace.fresh            pass     no artifact carries an mtime within 120s of now
+trace.order            pass     no artifact has an inode above every sibling in its directory
+trace.readable         pass     every scanned path was read; no verdict rests on a skipped path
+
+absolute_links=0
+aligned=5
+artifacts=5
+ctime=0
+errors=[]
+fresh=0
+leaks=0
+order=0
+root=<path>
+scan=["etc/systemd/system", "etc/cron.d", "usr/libexec", "usr/local/bin"]
+truncated_files=0
+uncorroborated=0
+weak_claims=0
+weak_paths=[]
+
+summary command=trace status=partial exit=1
+note: alignment, freshness, ctime and order pass. The holding
+      directories were still created today, so directory_ctime stays
+      partial: a ctime cannot be moved backwards. This is the floor.
+
+### covered. three of four deployed hosts were seen: coverage
+dwell.data      pass     12 event(s) across 5 host(s)
+dwell.hosts     pass     4 deployed, 3 mined, 2 failed of 5 observed
+                           <ledger> h1=deployed
+                           <ledger> h2=deployed
+                           <ledger> h3=deployed
+                           <ledger> h4=deployed
+dwell.schema    pass     every event carries one of the 3 known kinds
+dwell.span      pass     min=60 median=122.5 p90=203 max=203 over 4 host(s)
+dwell.coverage  pass     3 of 4 host(s) hit by at least one rule (75.0%), above half
+                           <hits> falco:systemd-drop=1
+                           <hits> yara:elf-xor=1
+                           <hits> yara:generic-miner=1
+
+deployed=4
+failed=2
+hit_rate=75.0
+hit_rate_all_hosts=60.0
+hits_post_deploy=3
+hits_pre_deploy=0
+hits_unmatched=[]
+hosts=5
+hosts_not_deployed=["h5"]
+hosts_unknown_kind=[]
+hosts_without_hits=1
+ledger=<path>
+mined=3
+not_deployed=1
+unknown_events=[]
+verdict=covered
+
+summary command=dwell status=pass exit=0
+
+### half. two of four deployed hosts were seen: exactly half is not coverage
+dwell.data      pass     11 event(s) across 5 host(s)
+dwell.hosts     pass     4 deployed, 3 mined, 1 failed of 5 observed
+                           <ledger> h1=deployed
+                           <ledger> h2=deployed
+                           <ledger> h3=deployed
+                           <ledger> h4=deployed
+dwell.schema    pass     every event carries one of the 3 known kinds
+dwell.span      pass     min=60 median=122.5 p90=203 max=203 over 4 host(s)
+dwell.coverage  partial  2 of 4 host(s) hit (50.0%); exactly half or less is not coverage
+                           <hits> falco:systemd-drop=1
+                           <hits> yara:generic-miner=1
+
+deployed=4
+failed=1
+hit_rate=50.0
+hit_rate_all_hosts=40.0
+hits_post_deploy=2
+hits_pre_deploy=0
+hits_unmatched=[]
+hosts=5
+hosts_not_deployed=["h5"]
+hosts_unknown_kind=[]
+hosts_without_hits=2
+ledger=<path>
+mined=3
+not_deployed=1
+unknown_events=[]
+verdict=partial-coverage
+
+summary command=dwell status=partial exit=1
+
+### cluster. two builds one feature apart: they still cluster
+batch.build-a_vs_build-b  fail     similarity 0.9802 is at or above the 0.98 threshold: one signature can cluster both builds
+
+min_similarity=0.9802
+pairs=1
+sizes={"build-a": 100, "build-b": 100}
+threshold=0.98
+
+summary command=batch status=fail exit=2
+
+### apart. two builds with nothing in common: they do not cluster
+batch.build-c_vs_build-d  pass     similarity 0.0000 is below the 0.98 threshold
+
+min_similarity=0.0
+pairs=1
+sizes={"build-c": 3, "build-d": 2}
+threshold=0.98
+
+summary command=batch status=pass exit=0
+
+demo.borrowed  fail     artifacts written last, mtimes borrowed from a neighbour (trace.ctime, trace.order)
+demo.floor     partial  same artifacts written first: the floor for a synthetic tree (trace.directory_ctime)
+demo.covered   pass     three of four deployed hosts were seen: coverage (dwell.data, dwell.hosts, dwell.schema)
+demo.half      partial  two of four deployed hosts were seen: exactly half is not coverage (dwell.coverage)
+demo.cluster   fail     two builds one feature apart: they still cluster (batch.build-a_vs_build-b)
+demo.apart     pass     two builds with nothing in common: they do not cluster (batch.build-c_vs_build-d)
+demo.sections  pass     6 section(s) show pass, partial and fail verdicts
+
+sections=["borrowed", "floor", "covered", "half", "cluster", "apart"]
+verdicts={"apart": "pass", "borrowed": "fail", "cluster": "fail", "covered": "pass", "floor": "partial", "half": "partial"}
+
+summary command=demo status=fail exit=2

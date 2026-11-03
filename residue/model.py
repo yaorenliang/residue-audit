@@ -67,11 +67,31 @@ class Report:
     command: str
     checks: List[Check]
     facts: Dict[str, Any] = field(default_factory=dict)
+    # the check that answers "was there anything to audit at all"; when it does not
+    # apply, no other check can make the run a verdict.
+    primary: str = ""
 
     def status(self) -> str:
+        """Fold the checks: a verdict first, then whether an audit happened.
+
+        SKIP means "this question did not apply", not "nothing was measured". Folding
+        by severity alone let one inapplicable check outrank four passing ones, so a
+        report that measured everything exited 3 - and the README defines 3 as
+        "nothing matched; the audit did not happen". The verdict therefore wins first,
+        and skip survives only when nothing was measured at all.
+        """
         if not self.checks:
             return SKIP
-        return max((c.status for c in self.checks), key=lambda s: SEVERITY[s])
+        if self.primary:
+            for check in self.checks:
+                if check.name == self.primary and check.status == SKIP:
+                    return SKIP
+        for verdict in (FAIL, PARTIAL):
+            if any(c.status == verdict for c in self.checks):
+                return verdict
+        if any(c.status == PASS for c in self.checks):
+            return PASS
+        return SKIP
 
     def exit_code(self) -> int:
         return EXIT[self.status()]

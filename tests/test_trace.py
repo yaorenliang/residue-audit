@@ -411,5 +411,29 @@ class AnEnableLinkIsNotAGap(unittest.TestCase):
         self.assertEqual(readable.status, PASS, readable.why)
 
 
+class ADirectoryIsOnlyNewerPastTheFrame(unittest.TestCase):
+    """The directory-clock comparison has a frame, and the frame is a floor.
+
+    A file written in the same breath as its directory has a ctime and an mtime
+    a millisecond apart, and the filesystem, not the tool, decides which one
+    wins. `DIRECTORY_CTIME_SLACK_MS` is that frame: below it the directory is
+    not called newer. The comparison only had the "newer" side pinned (a tree
+    assembled later is partial), so widening the window by turning the sign
+    around silently reported clean trees as partial and nothing noticed.
+    """
+
+    def test_a_directory_written_with_its_artifacts_is_not_newer(self):
+        tmp = tempfile.mkdtemp(prefix="residue-dirframe-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = os.path.join(tmp, "dirty")
+        os.makedirs(root)
+        fx.plant(root, neighbours=True, align=False)
+        report = trace.run(root, now_ms=fx.LATER_MS)
+        status = dict((c.name, c.status) for c in report.checks)
+        self.assertEqual(status["trace.directory_ctime"], PASS)
+        why = dict((c.name, c.why) for c in report.checks)["trace.directory_ctime"]
+        self.assertIn("no holding directory carries a ctime above", why)
+
+
 if __name__ == "__main__":
     unittest.main()
