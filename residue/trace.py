@@ -402,15 +402,34 @@ def _dir_observations(
     )
 
 
+def _fresh(
+    artifacts: Sequence[ArtifactObs], now_ms: int, window_s: int
+) -> Tuple[ArtifactObs, ...]:
+    """Which artifacts still carry an mtime inside the window.
+
+    Asked once, of every artifact, before any directory is consulted. Freshness is
+    a property of the file, not of its neighbours, and asking it inside the
+    alignment loop meant two copies of the question - one for artifacts with a
+    sibling and one for artifacts without - and a new branch could answer only one
+    of them.
+    """
+    return tuple(
+        art
+        for art in artifacts
+        if art.stamp is not None
+        and (now_ms - art.stamp.mtime_ms) // 1000 <= window_s
+    )
+
+
 def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
     """Sort every artifact into the answers it supports. No verdicts here."""
     aligned: List[ArtifactObs] = []
     leaked: List[ArtifactObs] = []
     uncorroborated: List[ArtifactObs] = []
     ctime_hits: List[ArtifactObs] = []
-    fresh: List[ArtifactObs] = []
     order_hits: List[ArtifactObs] = []
     changed: List[DirObs] = []
+    flat = [art for group in dirs for art in group.artifacts]
     for group in dirs:
         if group.changed is not None: changed.append(group)
         if group.neighbours == 0:
@@ -419,8 +438,6 @@ def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
             stamp = art.stamp
             if stamp is None:
                 continue
-            if (now_ms - stamp.mtime_ms) // 1000 <= fresh_window_s:
-                fresh.append(art)
             if group.neighbours == 0:
                 # nothing to be "no newer than": a pass here would be an
                 # assumption wearing a verdict's clothes
@@ -438,7 +455,7 @@ def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
         tuple(leaked),
         tuple(uncorroborated),
         tuple(ctime_hits),
-        tuple(fresh),
+        _fresh(flat, now_ms, fresh_window_s),
         tuple(order_hits),
         tuple(changed),
     )
