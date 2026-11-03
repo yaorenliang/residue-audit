@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from itertools import combinations
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .model import FAIL, PASS, PARTIAL, SKIP, Check, Report
 
@@ -44,64 +44,55 @@ def jaccard(a: set, b: set) -> Optional[float]:
     return len(a & b) / len(union) if union else 0.0
 
 
+def _pairs(sets: List[Dict[str, object]]) -> List[Tuple[str, Optional[float]]]:
+    """Every pair once, with the similarity it carries - None when undefined.
+
+    Computed once and handed to both the checks and the summary. The summary used
+    to recompute every pair to find its minimum, so the number printed as
+    min_similarity and the numbers the checks judged were two separate walks of
+    the same data.
+    """
+    return [
+        (
+            "batch.%s_vs_%s" % (left["name"], right["name"]),
+            jaccard(left["features"], right["features"]),
+        )
+        for left, right in combinations(sets, 2)
+    ]
+
+
+def _verdict(score: Optional[float], threshold: float) -> Tuple[str, str]:
+    """Status and message for one pair; the bands are stated here and nowhere else."""
+    if score is None:
+        return SKIP, "similarity is undefined: both feature sets are empty"
+    if score >= threshold:
+        return (
+            FAIL,
+            "similarity %.4f is at or above the %.2f threshold: one signature can cluster both builds"
+            % (score, threshold),
+        )
+    if score >= threshold - 0.02:
+        return (
+            PARTIAL,
+            "similarity %.4f sits just under the %.2f threshold; the margin is too small to trust"
+            % (score, threshold),
+        )
+    return PASS, "similarity %.4f is below the %.2f threshold" % (score, threshold)
+
+
 def run(paths: List[str], threshold: float = DEFAULT_THRESHOLD) -> Report:
     sets = [load_features(p) for p in paths]
-    checks: List[Check] = []
+    pairs = _pairs(sets)
+    checks = [Check(name, *_verdict(score, threshold)) for name, score in pairs]
 
-    for left, right in combinations(sets, 2):
-        score = jaccard(left["features"], right["features"])
-        name = "batch.%s_vs_%s" % (left["name"], right["name"])
-        if score is None:
-            checks.append(
-                Check(
-                    name,
-                    SKIP,
-                    "similarity is undefined: both feature sets are empty",
-                )
-            )
-        elif score >= threshold:
-            checks.append(
-                Check(
-                    name,
-                    FAIL,
-                    "similarity %.4f is at or above the %.2f threshold: one signature can cluster both builds"
-                    % (score, threshold),
-                )
-            )
-        elif score >= threshold - 0.02:
-            checks.append(
-                Check(
-                    name,
-                    PARTIAL,
-                    "similarity %.4f sits just under the %.2f threshold; the margin is too small to trust"
-                    % (score, threshold),
-                )
-            )
-        else:
-            checks.append(
-                Check(
-                    name,
-                    PASS,
-                    "similarity %.4f is below the %.2f threshold" % (score, threshold),
-                )
-            )
-
+    defined = [score for _, score in pairs if score is not None]
     return Report(
         "batch",
         checks,
         {
-            "pairs": len(checks),
+            "pairs": len(pairs),
             "threshold": threshold,
             "sizes": {s["name"]: len(s["features"]) for s in sets},
-            "min_similarity": _bounds(sets),
+            "min_similarity": round(min(defined), 4) if defined else None,
         },
     )
-
-
-def _bounds(sets: List[Dict[str, object]]) -> Optional[float]:
-    """Lowest defined similarity, or None when no pair could be defined."""
-    scores = [
-        jaccard(a["features"], b["features"]) for a, b in combinations(sets, 2)
-    ]
-    defined = [score for score in scores if score is not None]
-    return round(min(defined), 4) if defined else None

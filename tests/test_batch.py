@@ -1,7 +1,9 @@
+import inspect
 import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from residue import batch
 from residue.model import FAIL, PARTIAL, PASS, SKIP
@@ -108,6 +110,42 @@ class BatchUndefinedSimilarityTest(unittest.TestCase):
         self.assertEqual(report.facts["pairs"], 6)
         # the undefined pair is ignored, so the minimum is the real 0.0
         self.assertEqual(report.facts["min_similarity"], 0.0)
+
+
+
+class BatchSinglePassTest(unittest.TestCase):
+    """The summary and the checks read the same pass over the pairs."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-batch-pass-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _write(self, name, features):
+        from tests import fixtures as fx
+
+        path = os.path.join(self.tmp, name + ".json")
+        fx.write_json(path, {"name": name, "features": features})
+        return path
+
+    def test_every_pair_is_scored_once(self):
+        paths = [self._write("b%d" % i, ["f%d" % i]) for i in range(4)]
+        with mock.patch.object(batch, "jaccard", wraps=batch.jaccard) as scored:
+            report = batch.run(paths)
+        # four builds make six pairs; the summary used to walk all six a second
+        # time to find its minimum
+        self.assertEqual(scored.call_count, 6)
+        self.assertEqual(report.facts["pairs"], 6)
+
+    def test_run_states_no_band_of_its_own(self):
+        source = inspect.getsource(batch.run)
+        for word in ("SKIP", "FAIL", "PARTIAL", "0.98"):
+            self.assertNotIn(word, source)
+
+    def test_the_bands_are_the_four_answers(self):
+        self.assertEqual(batch._verdict(None, 0.98)[0], SKIP)
+        self.assertEqual(batch._verdict(0.98, 0.98)[0], FAIL)
+        self.assertEqual(batch._verdict(0.97, 0.98)[0], PARTIAL)
+        self.assertEqual(batch._verdict(0.95, 0.98)[0], PASS)
 
 
 if __name__ == "__main__":
