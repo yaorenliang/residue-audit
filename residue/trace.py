@@ -21,7 +21,9 @@ see.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Sequence
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import stat_io
 from .model import FAIL, PASS, PARTIAL, SKIP, Check, Evidence, Report
@@ -102,425 +104,581 @@ def exec_start_targets(line: str) -> List[str]:
     return out
 
 
-class Scanner:
-    def __init__(
-        self,
-        root: str,
-        scan: Sequence[str] = DEFAULT_SCAN,
-        markers: Sequence[str] = DEFAULT_MARKERS,
-        fresh_window_s: int = 120,
-        broad: bool = False,
-    ) -> None:
-        self.root = os.path.abspath(root)
-        self.scan = tuple(scan)
-        self.markers = tuple(markers)
-        self.fresh_window_s = fresh_window_s
-        self.broad = broad
-        self.marker_hits: Dict[str, str] = {}
-        self.units: Dict[str, List[str]] = {}
-        self.artifacts: List[str] = []
-        self.weak: List[str] = []
-        self.counts: Dict[str, int] = {}
-        self.errors: List[stat_io.StatError] = []
-        self.truncated_files = 0
-        self._heads: Dict[str, tuple] = {}
-        self._members: List[str] = []
-        self._scanned = False
+# -- observation -----------------------------------------------------------
+#
+# One pass over the tree produces values; nothing below this line decides
+# anything. The split is the point: a check may not read the filesystem, and an
+# observation may not know what a good answer looks like, so neither can quietly
+# borrow the other's authority.
 
-    # -- discovery ---------------------------------------------------------
-    def _record(self, err: Optional[stat_io.StatError]) -> None:
-        """Keep one report per failed path and operation."""
-        if err is not None and err not in self.errors:
-            self.errors.append(err)
 
-    def _scan_files(self) -> List[str]:
-        """Scan members, listed once: a directory listed twice can change mid-run."""
-        if not self._scanned:
-            self._scanned = True
-            for rel in self.scan:
-                paths, errors = stat_io.walk_files(self.root, rel)
-                self._members.extend(paths)
-                for err in errors:
-                    self._record(err)
-        return self._members
+@dataclass(frozen=True)
+class ArtifactObs:
+    """One path we claim, the reason we claim it, and the stamps read once."""
 
-    def _head(self, path: str) -> tuple:
-        """(text, truncated) for one scanned file, read at most once.
+    path: str
+    shown: str
+    marker: str
+    stamp: Optional[stat_io.Stat]
 
-        The truncation flag travels with the text because a file longer than the
-        read window is not a file without a marker: discover() has to record what
-        it did not read instead of clearing the file.
-        """
-        cached = self._heads.get(path)
-        if cached is None:
-            text, truncated, err = stat_io.read_head(path)
-            self._record(err)
+
+@dataclass(frozen=True)
+class DirObs:
+    """A directory holding artifacts, and everything an artifact can hide behind."""
+
+    directory: str
+    shown: str
+    cap_mtime_ms: int
+    cap_ctime_ms: int
+    max_ino: int
+    neighbours: int
+    artifacts: Tuple[ArtifactObs, ...]
+    changed: Optional[Tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class Hits:
+    """Which artifacts answered which question.
+
+    The counts are derived from these tuples rather than kept beside them: a
+    second integer that has to agree with a list is one more thing that can be
+    wrong, and the report would then print a number no artifact supports.
+    """
+
+    aligned: Tuple[ArtifactObs, ...]
+    leaked: Tuple[ArtifactObs, ...]
+    uncorroborated: Tuple[ArtifactObs, ...]
+    ctime: Tuple[ArtifactObs, ...]
+    fresh: Tuple[ArtifactObs, ...]
+    order: Tuple[ArtifactObs, ...]
+    directories: Tuple[DirObs, ...]
+
+
+@dataclass(frozen=True)
+class Observations:
+    """Everything one pass learned. The only thing the checks are allowed to see."""
+
+    root: str
+    now_ms: int
+    fresh_window_s: int
+    scan: Tuple[str, ...]
+    artifacts: Tuple[ArtifactObs, ...]
+    dirs: Tuple[DirObs, ...]
+    hits: Hits
+    weak: Tuple[str, ...]
+    errors: Tuple[stat_io.StatError, ...]
+    truncated_files: int
+
+
+@dataclass
+class _Scratch:
+    """Mutable scratch space for one discovery pass; it never leaves observe()."""
+
+    root: str
+    scan: Tuple[str, ...]
+    markers: Tuple[str, ...]
+    broad: bool
+    members: List[str] = field(default_factory=list)
+    heads: Dict[str, Tuple[str, bool]] = field(default_factory=dict)
+    claims: Dict[str, str] = field(default_factory=dict)
+    weak: List[str] = field(default_factory=list)
+    errors: List[stat_io.StatError] = field(default_factory=list)
+    truncated_files: int = 0
+    listed: bool = False
+
+
+def _record(scratch: _Scratch, err: Optional[stat_io.StatError]) -> None:
+    """Keep one report per failed path and operation."""
+    if err is not None and err not in scratch.errors:
+        scratch.errors.append(err)
+
+
+def _members(scratch: _Scratch) -> List[str]:
+    """Scan members, listed once: a directory listed twice can change mid-run."""
+    if not scratch.listed:
+        scratch.listed = True
+        for rel in scratch.scan:
+            paths, errors = stat_io.walk_files(scratch.root, rel)
+            scratch.members.extend(paths)
+            for err in errors:
+                _record(scratch, err)
+    return scratch.members
+
+
+def _head(scratch: _Scratch, path: str) -> Tuple[str, bool]:
+    """(text, truncated) for one scanned file, read at most once.
+
+    The truncation flag travels with the text because a file longer than the read
+    window is not a file without a marker: discovery has to record what it did not
+    read instead of clearing the file.
+    """
+    cached = scratch.heads.get(path)
+    if cached is None:
+        text, truncated, err = stat_io.read_head(path)
+        _record(scratch, err)
+        if truncated:
+            scratch.truncated_files += 1
+        cached = (text, truncated)
+        scratch.heads[path] = cached
+    return cached
+
+
+def _marker_units(scratch: _Scratch) -> Tuple[List[str], set]:
+    """Units that carry an artifact marker, and the paths they start.
+
+    This is the anchor for everything else. A stock Ubuntu root is full of service
+    units that mention binaries in /usr/libexec - packagekit, boltd, qmi-proxy -
+    and a rule that claims any such binary calls all of them artifacts. On a real
+    root that rule measured 5 correct claims out of 13 (38% precision), so
+    identification now starts from the marker itself and follows ExecStart= out.
+    """
+    units: List[str] = []
+    targets = set()
+    for path in _members(scratch):
+        if not path.endswith(".service"):
+            continue
+        head, truncated = _head(scratch, path)
+        if not carries_marker(head, scratch.markers):
             if truncated:
-                self.truncated_files += 1
-            cached = (text, truncated)
-            self._heads[path] = cached
-        return cached
+                # the marker may sit past the read window: not audited, not
+                # cleared, and not silently excluded from the count
+                scratch.weak.append(path)
+            continue
+        units.append(path)
+        for line in head.splitlines():
+            for target in exec_start_targets(line):
+                targets.add(target)
+    return units, targets
 
-    def _marker_units(self) -> tuple:
-        """Units that carry an artifact marker, and the paths they start.
 
-        This is the anchor for everything else. A stock Ubuntu root is full of
-        service units that mention binaries in /usr/libexec - packagekit,
-        boltd, qmi-proxy - and a rule that claims any such binary calls all of
-        them artifacts. On a real root that rule measured 5 correct claims out of
-        13 (38% precision), so identification now starts from the marker itself
-        and follows ExecStart= outward from there.
-        """
-        units: List[str] = []
-        targets = set()
-        for path in self._scan_files():
-            if not path.endswith(".service"):
+def _strong_claim(
+    scratch: _Scratch, path: str, units: Sequence[str], targets: set
+) -> Optional[str]:
+    if path in units:
+        return "unit:marker"
+    head, _ = _head(scratch, path)
+    for marker in scratch.markers:
+        if carries_marker(head, (marker,)):
+            return "marker:" + marker
+    absolute = os.path.normpath("/" + os.path.relpath(path, scratch.root))
+    if absolute in targets:
+        return "unit:execstart"
+    for target in sorted(targets):
+        name = os.path.basename(target)
+        if name and name in head:
+            return "content:" + name
+    return None
+
+
+def _broad_names(scratch: _Scratch, targets: set) -> set:
+    names = {os.path.basename(t) for t in targets}
+    for path in _members(scratch):
+        if not path.endswith(".service"):
+            continue
+        head, _ = _head(scratch, path)
+        for line in head.splitlines():
+            for target in exec_start_targets(line):
+                base = os.path.basename(target)
+                if base:
+                    names.add(base)
+    return names
+
+
+def _broad_claim(scratch: _Scratch, path: str, names: set) -> Optional[str]:
+    """The old rule set: any binary named by any unit's ExecStart= is ours.
+
+    Kept behind --broad because on a busy root it is wrong more often than it is
+    right; the measured precision is in docs/limits.md.
+    """
+    if os.path.basename(path) in names:
+        return "basename:execstart"
+    head, _ = _head(scratch, path)
+    for name in sorted(names):
+        if name and name in head:
+            return "content:" + name
+    return None
+
+
+def _claim(scratch: _Scratch) -> None:
+    """Decide which scanned paths are claims, and record the rest as weak or idle."""
+    units, targets = _marker_units(scratch)
+    names = _broad_names(scratch, targets)
+    for path in _members(scratch):
+        reason = _strong_claim(scratch, path, units, targets)
+        if reason is None:
+            _, truncated = _head(scratch, path)
+            if truncated:
+                # "not ours" is a claim we did not earn when we stopped reading
+                # before the end of the file
+                scratch.weak.append(path)
                 continue
-            head, truncated = self._head(path)
-            if not carries_marker(head, self.markers):
-                if truncated:
-                    # the marker may sit past the read window: not audited, not
-                    # cleared, and not silently excluded from the count
-                    self.weak.append(path)
+            # A file the broad rule would have claimed is a candidate we are
+            # deliberately not auditing. Everything else - ordinary system files -
+            # is not a claim of any kind and must not be reported as one: a "weak
+            # claim" nobody ever made is noise, not caution.
+            broad = _broad_claim(scratch, path, names)
+            if broad is None:
                 continue
-            units.append(path)
-            for line in head.splitlines():
-                for target in exec_start_targets(line):
-                    targets.add(target)
-        return units, targets
+            if not scratch.broad:
+                scratch.weak.append(path)
+                continue
+            reason = "broad:" + broad
+        if os.path.islink(path):
+            # a link is how systemd enables a unit: the link is the artifact as
+            # much as what it points at, and the reader should see which
+            reason = reason + " via=symlink"
+        scratch.claims[path] = reason
+    scratch.weak.sort()
 
-    def _strong_claim(self, path: str, units: Sequence[str], targets: set) -> Optional[str]:
-        if path in units:
-            return "unit:marker"
-        head, _ = self._head(path)
-        for marker in self.markers:
-            if carries_marker(head, (marker,)):
-                return "marker:" + marker
-        absolute = os.path.normpath("/" + os.path.relpath(path, self.root))
-        if absolute in targets:
-            return "unit:execstart"
-        for target in sorted(targets):
-            name = os.path.basename(target)
-            if name and name in head:
-                return "content:" + name
+
+def _stamp(scratch: _Scratch) -> Tuple[ArtifactObs, ...]:
+    """Read every claim's stamps once, and report the ones we could not read."""
+    out: List[ArtifactObs] = []
+    for path in sorted(scratch.claims):
+        stamp, err = stat_io.stat_of(path)
+        if stamp is None:
+            _record(scratch, err)
+        out.append(ArtifactObs(path, sanitize(path, scratch.root), scratch.claims[path], stamp))
+    return tuple(out)
+
+
+def _group(artifacts: Sequence[ArtifactObs]) -> Dict[str, List[ArtifactObs]]:
+    groups: Dict[str, List[ArtifactObs]] = {}
+    for art in artifacts:
+        groups.setdefault(os.path.dirname(art.path), []).append(art)
+    return groups
+
+
+def _directory_changed_after(
+    scratch: _Scratch, directory: str, artifacts: Sequence[ArtifactObs]
+) -> Optional[Tuple[int, int]]:
+    """(directory ctime, oldest artifact mtime) when the directory is newer.
+
+    Creating a file updates the parent directory's mtime and ctime, and no
+    user-space trick avoids that write. A directory whose stamp is newer than the
+    oldest artifact it holds was therefore assembled - or added to - after that
+    artifact claims to exist. That is a change we can date, not a verdict about
+    who made it, so it is reported as partial.
+    """
+    info, err = stat_io.stat_of(directory)
+    if info is None:
+        _record(scratch, err)
         return None
-
-    def _broad_names(self, targets: set) -> set:
-        names = {os.path.basename(t) for t in targets}
-        for path in self._scan_files():
-            if not path.endswith(".service"):
-                continue
-            head, _ = self._head(path)
-            for line in head.splitlines():
-                for target in exec_start_targets(line):
-                    base = os.path.basename(target)
-                    if base:
-                        names.add(base)
-        return names
-
-    def _broad_claim(self, path: str, names: set) -> Optional[str]:
-        """The old rule set: any binary named by any unit's ExecStart= is ours.
-
-        Kept behind --broad because on a busy root it is wrong more often than it
-        is right; the measured precision is in docs/limits.md.
-        """
-        if os.path.basename(path) in names:
-            return "basename:execstart"
-        head, _ = self._head(path)
-        for name in sorted(names):
-            if name and name in head:
-                return "content:" + name
-        return None
-
-    def discover(self) -> None:
-        units, targets = self._marker_units()
-        names = self._broad_names(targets)
-        for path in self._scan_files():
-            reason = self._strong_claim(path, units, targets)
-            if reason is None:
-                _, truncated = self._head(path)
-                if truncated:
-                    # "not ours" is a claim we did not earn when we stopped
-                    # reading before the end of the file
-                    self.weak.append(path)
-                    continue
-                # A file the broad rule would have claimed is a candidate we are
-                # deliberately not auditing. Everything else - ordinary system
-                # files - is not a claim of any kind and must not be reported as
-                # one: a "weak claim" nobody ever made is noise, not caution.
-                broad = self._broad_claim(path, names)
-                if broad is None:
-                    continue
-                if not self.broad:
-                    self.weak.append(path)
-                    continue
-                reason = "broad:" + broad
-            if os.path.islink(path):
-                # a link is how systemd enables a unit: the link is the artifact
-                # as much as what it points at, and the reader should see which
-                reason = reason + " via=symlink"
-            self.marker_hits[path] = reason
-            self.artifacts.append(path)
-        self.artifacts.sort()
-        self.weak.sort()
-
-    # -- checks ------------------------------------------------------------
-    def _by_dir(self) -> Dict[str, List[str]]:
-        groups: Dict[str, List[str]] = {}
-        for path in self.artifacts:
-            groups.setdefault(os.path.dirname(path), []).append(path)
-        return groups
-
-    def _directory_changed_after(self, directory: str, paths: Sequence[str]) -> Optional[tuple]:
-        """(directory ctime, oldest artifact mtime) when the directory is newer.
-
-        Creating a file updates the parent directory's mtime and ctime, and no
-        user-space trick avoids that write. A directory whose stamp is newer than
-        the oldest artifact it holds was therefore assembled - or added to - after
-        that artifact claims to exist. That is a change we can date, not a verdict
-        about who made it, so it is reported as partial.
-        """
-        info, err = stat_io.stat_of(directory)
-        if info is None:
-            self._record(err)
+    oldest: Optional[int] = None
+    for art in artifacts:
+        if art.stamp is None:
             return None
-        oldest: Optional[int] = None
-        for path in paths:
-            held, held_err = stat_io.stat_of(path)
-            if held is None:
-                # Name the path that failed, not the directory that happened to
-                # be stat'ed first: an unreadable path must not be reported under
-                # a name we could read.
-                self._record(held_err)
-                return None
-            oldest = held.mtime_ms if oldest is None else min(oldest, held.mtime_ms)
-        changed = info.ctime_ms
-        if changed > oldest + DIRECTORY_CTIME_SLACK_MS:
-            return (changed, oldest)
+        oldest = art.stamp.mtime_ms if oldest is None else min(oldest, art.stamp.mtime_ms)
+    if oldest is None:
         return None
+    if info.ctime_ms > oldest + DIRECTORY_CTIME_SLACK_MS:
+        return (info.ctime_ms, oldest)
+    return None
 
-    def _readable_check(self) -> Check:
-        if not self.errors:
-            return Check(
-                "trace.readable",
-                PASS,
-                "every scanned path was read; no verdict rests on a skipped path",
+
+def _dir_stamp(scratch: _Scratch, directory: str, arts: Sequence[ArtifactObs]) -> DirObs:
+    cap, cap_ctime, max_ino, neighbours = stat_io.dir_stats(
+        directory, {art.path for art in arts}, scratch.errors
+    )
+    return DirObs(
+        directory,
+        sanitize(directory, scratch.root),
+        cap,
+        cap_ctime,
+        max_ino,
+        neighbours,
+        tuple(arts),
+        _directory_changed_after(scratch, directory, arts),
+    )
+
+
+def _dir_observations(
+    scratch: _Scratch, artifacts: Sequence[ArtifactObs]
+) -> Tuple[DirObs, ...]:
+    groups = _group(artifacts)
+    return tuple(
+        _dir_stamp(scratch, directory, groups[directory])
+        for directory in sorted(groups)
+    )
+
+
+def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
+    """Sort every artifact into the answers it supports. No verdicts here."""
+    aligned: List[ArtifactObs] = []
+    leaked: List[ArtifactObs] = []
+    uncorroborated: List[ArtifactObs] = []
+    ctime_hits: List[ArtifactObs] = []
+    fresh: List[ArtifactObs] = []
+    order_hits: List[ArtifactObs] = []
+    changed: List[DirObs] = []
+    for group in dirs:
+        if group.changed is not None: changed.append(group)
+        if group.neighbours == 0:
+            uncorroborated.extend(group.artifacts)
+        for art in group.artifacts:
+            stamp = art.stamp
+            if stamp is None:
+                continue
+            if (now_ms - stamp.mtime_ms) // 1000 <= fresh_window_s:
+                fresh.append(art)
+            if group.neighbours == 0:
+                # nothing to be "no newer than": a pass here would be an
+                # assumption wearing a verdict's clothes
+                continue
+            if stamp.mtime_ms > group.cap_mtime_ms:
+                leaked.append(art)
+            else:
+                aligned.append(art)
+            if stamp.ino > group.max_ino:
+                order_hits.append(art)
+            if stamp.ctime_ms > group.cap_ctime_ms:
+                ctime_hits.append(art)
+    return Hits(
+        tuple(aligned),
+        tuple(leaked),
+        tuple(uncorroborated),
+        tuple(ctime_hits),
+        tuple(fresh),
+        tuple(order_hits),
+        tuple(changed),
+    )
+
+
+def observe(
+    root: str,
+    scan: Optional[Sequence[str]] = None,
+    markers: Optional[Sequence[str]] = None,
+    fresh_window_s: int = 120,
+    now_ms: Optional[int] = None,
+    broad: bool = False,
+) -> Observations:
+    """One pass: discover claims, read their stamps, and sort them by question."""
+    scratch = _Scratch(
+        os.path.abspath(root),
+        tuple(scan or DEFAULT_SCAN),
+        tuple(markers or DEFAULT_MARKERS),
+        broad,
+    )
+    _claim(scratch)
+    artifacts = _stamp(scratch)
+    dirs = _dir_observations(scratch, artifacts)
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    return Observations(
+        scratch.root,
+        now_ms,
+        fresh_window_s,
+        scratch.scan,
+        artifacts,
+        dirs,
+        _hits(dirs, now_ms, fresh_window_s),
+        tuple(scratch.weak),
+        tuple(scratch.errors),
+        scratch.truncated_files,
+    )
+
+
+# -- judgement -------------------------------------------------------------
+#
+# One function per check. Each reads Observations and returns a Check; none of
+# them touches the filesystem, and none of them can see another's answer.
+
+
+def _check_artifacts(obs: Observations) -> Check:
+    if not obs.artifacts:
+        return Check(
+            "trace.artifacts",
+            SKIP,
+            "no artifact matched the marker set; nothing to audit",
+        )
+    why = "%d artifact(s) matched the marker set" % len(obs.artifacts)
+    if obs.weak:
+        why += " (+%d weak claim(s) not audited)" % len(obs.weak)
+    return Check(
+        "trace.artifacts",
+        PASS,
+        why,
+        [Evidence(art.shown, "marker", art.marker) for art in obs.artifacts],
+    )
+
+
+def _check_aligned(obs: Observations) -> Check:
+    hits = obs.hits
+    total = len(obs.artifacts)
+    if not hits.aligned and not hits.leaked:
+        return Check(
+            "trace.aligned",
+            SKIP,
+            "no artifact has a sibling to compare against; alignment is unmeasurable here",
+        )
+    evidence: List[Evidence] = []
+    for group in obs.dirs:
+        if group.neighbours == 0:
+            continue
+        for art in group.artifacts:
+            if art.stamp is not None and art.stamp.mtime_ms > group.cap_mtime_ms:
+                evidence.append(Evidence(art.shown, "mtime_ms", str(art.stamp.mtime_ms)))
+        evidence.append(Evidence(group.shown, "neighbour_cap_ms", str(group.cap_mtime_ms)))
+    if not hits.leaked:
+        status, why = PASS, "all %d artifact(s) are no newer than a sibling" % total
+    elif hits.aligned:
+        status = PARTIAL
+        why = "%d of %d artifact(s) stand out with a mtime newer than every sibling" % (
+            len(hits.leaked),
+            total,
+        )
+    else:
+        status, why = FAIL, "all %d artifact(s) carry a newer mtime than every sibling" % total
+    return Check("trace.aligned", status, why, evidence)
+
+
+def _check_corroborated(obs: Observations) -> Check:
+    hits = obs.hits
+    if not hits.uncorroborated:
+        return Check(
+            "trace.corroborated",
+            PASS,
+            "every directory holding an artifact also holds a non-artifact sibling",
+        )
+    return Check(
+        "trace.corroborated",
+        PARTIAL,
+        "%d of %d artifact(s) live where no sibling exists to borrow an mtime from; "
+        "alignment cannot be shown, only assumed"
+        % (len(hits.uncorroborated), len(obs.artifacts)),
+        [Evidence(art.shown, "corroborator", "none") for art in hits.uncorroborated],
+    )
+
+
+def _check_ctime(obs: Observations) -> Check:
+    hits = obs.hits.ctime
+    if not hits:
+        return Check(
+            "trace.ctime",
+            PASS,
+            "no artifact has a ctime above every sibling in its directory",
+        )
+    return Check(
+        "trace.ctime",
+        FAIL,
+        "%d artifact(s) have a ctime newer than every sibling: mtime can be borrowed, "
+        "ctime cannot" % len(hits),
+        [Evidence(art.shown, "ctime_vs_cap", "newer") for art in hits],
+    )
+
+
+def _check_directory_ctime(obs: Observations) -> Check:
+    changed = obs.hits.directories
+    if not changed:
+        return Check(
+            "trace.directory_ctime",
+            PASS,
+            "no holding directory carries a ctime above the artifacts it holds",
+        )
+    return Check(
+        "trace.directory_ctime",
+        PARTIAL,
+        "%d holding director(y/ies) changed after the artifacts they hold: a directory "
+        "mtime/ctime is the usual hiding place, and it dates the assembly, not the intent"
+        % len(changed),
+        [
+            Evidence(
+                group.shown,
+                "dir_ctime_vs_oldest_mtime",
+                "%d > %d" % (group.changed[0], group.changed[1]),
             )
+            for group in changed
+        ],
+    )
+
+
+def _check_fresh(obs: Observations) -> Check:
+    hits = obs.hits.fresh
+    if not hits:
+        return Check(
+            "trace.fresh",
+            PASS,
+            "no artifact carries an mtime within %ds of now" % obs.fresh_window_s,
+        )
+    return Check(
+        "trace.fresh",
+        FAIL,
+        "%d artifact(s) still carry an mtime within %ds of now"
+        % (len(hits), obs.fresh_window_s),
+        [
+            Evidence(art.shown, "fresh_window_s", str(obs.fresh_window_s))
+            for art in hits
+        ],
+    )
+
+
+def _check_order(obs: Observations) -> Check:
+    hits = obs.hits.order
+    if not hits:
+        return Check(
+            "trace.order",
+            PASS,
+            "no artifact has an inode above every sibling in its directory",
+        )
+    return Check(
+        "trace.order",
+        FAIL,
+        "%d artifact(s) have a higher inode than every sibling, so creation order is "
+        "recoverable" % len(hits),
+        [Evidence(art.shown, "inode_order", "newest") for art in hits],
+    )
+
+
+def _check_readable(obs: Observations) -> Check:
+    if not obs.errors:
         return Check(
             "trace.readable",
-            PARTIAL,
-            "%d path(s) unreadable; verdict covers the readable subset only"
-            % len(self.errors),
-            [
-                Evidence(
-                    sanitize(err.path, self.root),
-                    "unreadable",
-                    "%s: %s" % (err.op, err.err),
-                )
-                for err in self.errors
-            ],
-        )
-
-    def checks(self, now_ms: int) -> List[Check]:
-        if not self.artifacts:
-            return [
-                Check(
-                    "trace.artifacts",
-                    SKIP,
-                    "no artifact matched the marker set; nothing to audit",
-                ),
-                self._readable_check(),
-            ]
-
-        groups = self._by_dir()
-        aligned: List[str] = []
-        unaligned: List[str] = []
-        uncorroborated: List[str] = []
-        fresh: List[str] = []
-        order_hits: List[str] = []
-        ctime_hits: List[str] = []
-        directory_hits: List[tuple] = []
-        evidence: List[Evidence] = []
-
-        for directory, paths in sorted(groups.items()):
-            ours = set(paths)
-            cap, cap_ctime, max_ino, neighbours = stat_io.dir_stats(directory, ours, self.errors)
-            shown = sanitize(directory, self.root)
-            changed = self._directory_changed_after(directory, paths)
-            if changed is not None:
-                directory_hits.append((directory, changed[0], changed[1]))
-            if neighbours == 0:
-                uncorroborated.extend(paths)
-                evidence.append(Evidence(shown, "neighbours", "0"))
-                for path in paths:
-                    info, err = stat_io.stat_of(path)
-                    if info is None:
-                        self._record(err)
-                        continue
-                    if (now_ms - info.mtime_ms) // 1000 <= self.fresh_window_s:
-                        fresh.append(path)
-                continue
-            for path in paths:
-                info, err = stat_io.stat_of(path)
-                if info is None:
-                    self._record(err)
-                    continue
-                if (now_ms - info.mtime_ms) // 1000 <= self.fresh_window_s:
-                    fresh.append(path)
-                if info.mtime_ms > cap:
-                    unaligned.append(path)
-                    evidence.append(
-                        Evidence(sanitize(path, self.root), "mtime_ms", str(info.mtime_ms))
-                    )
-                else:
-                    aligned.append(path)
-                if info.ino > max_ino:
-                    order_hits.append(path)
-                if info.ctime_ms > cap_ctime:
-                    ctime_hits.append(path)
-            evidence.append(
-                Evidence(shown, "neighbour_cap_ms", str(cap))
-            )
-
-        total = len(self.artifacts)
-        artefacts_check = Check(
-            "trace.artifacts",
             PASS,
-            "%d artifact(s) matched the marker set"
-            % total
-            + (" (+%d weak claim(s) not audited)" % len(self.weak) if self.weak else ""),
-            [Evidence(sanitize(p, self.root), "marker", self.marker_hits[p]) for p in self.artifacts],
+            "every scanned path was read; no verdict rests on a skipped path",
         )
+    return Check(
+        "trace.readable",
+        PARTIAL,
+        "%d path(s) unreadable; verdict covers the readable subset only" % len(obs.errors),
+        [
+            Evidence(err.path, "unreadable", "%s: %s" % (err.op, err.err))
+            for err in obs.errors
+        ],
+    )
 
-        if not aligned and not unaligned:
-            # every artifact sits alone in its directory: there is nothing to be
-            # "no newer than", so a pass here would be an assumption wearing a
-            # verdict's clothes
-            align_status = SKIP
-            align_why = "no artifact has a sibling to compare against; alignment is unmeasurable here"
-        elif not unaligned:
-            align_status, align_why = PASS, "all %d artifact(s) are no newer than a sibling" % total
-        elif aligned:
-            align_status = PARTIAL
-            align_why = "%d of %d artifact(s) stand out with a mtime newer than every sibling" % (
-                len(unaligned),
-                total,
-            )
-        else:
-            align_status, align_why = FAIL, "all %d artifact(s) carry a newer mtime than every sibling" % total
 
-        if not uncorroborated:
-            corroborated = Check(
-                "trace.corroborated",
-                PASS,
-                "every directory holding an artifact also holds a non-artifact sibling",
-            )
-        else:
-            corroborated = Check(
-                "trace.corroborated",
-                PARTIAL,
-                "%d of %d artifact(s) live where no sibling exists to borrow an mtime from; alignment cannot be shown, only assumed"
-                % (len(uncorroborated), total),
-                [Evidence(sanitize(p, self.root), "corroborator", "none") for p in uncorroborated],
-            )
+JUDGES = (
+    _check_artifacts,
+    _check_aligned,
+    _check_corroborated,
+    _check_ctime,
+    _check_directory_ctime,
+    _check_fresh,
+    _check_order,
+    _check_readable,
+)
 
-        if ctime_hits:
-            ctime_check = Check(
-                "trace.ctime",
-                FAIL,
-                "%d artifact(s) have a ctime newer than every sibling: mtime can be borrowed, ctime cannot"
-                % len(ctime_hits),
-                [Evidence(sanitize(p, self.root), "ctime_vs_cap", "newer") for p in ctime_hits],
-            )
-        else:
-            ctime_check = Check(
-                "trace.ctime",
-                PASS,
-                "no artifact has a ctime above every sibling in its directory",
-            )
 
-        if directory_hits:
-            directory_check = Check(
-                "trace.directory_ctime",
-                PARTIAL,
-                "%d holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent"
-                % len(directory_hits),
-                [
-                    Evidence(
-                        sanitize(directory, self.root),
-                        "dir_ctime_vs_oldest_mtime",
-                        "%d > %d" % (changed, oldest),
-                    )
-                    for directory, changed, oldest in directory_hits
-                ],
-            )
-        else:
-            directory_check = Check(
-                "trace.directory_ctime",
-                PASS,
-                "no holding directory carries a ctime above the artifacts it holds",
-            )
+def checks(obs: Observations) -> List[Check]:
+    return [judge(obs) for judge in JUDGES]
 
-        if fresh:
-            fresh_check = Check(
-                "trace.fresh",
-                FAIL,
-                "%d artifact(s) still carry an mtime within %ds of now" % (len(fresh), self.fresh_window_s),
-                [Evidence(sanitize(p, self.root), "fresh_window_s", str(self.fresh_window_s)) for p in fresh],
-            )
-        else:
-            fresh_check = Check(
-                "trace.fresh",
-                PASS,
-                "no artifact carries an mtime within %ds of now" % self.fresh_window_s,
-            )
 
-        if order_hits:
-            order_check = Check(
-                "trace.order",
-                FAIL,
-                "%d artifact(s) have a higher inode than every sibling, so creation order is recoverable" % len(order_hits),
-                [Evidence(sanitize(p, self.root), "inode_order", "newest") for p in order_hits],
-            )
-        else:
-            order_check = Check(
-                "trace.order",
-                PASS,
-                "no artifact has an inode above every sibling in its directory",
-            )
-
-        self.counts = {
-            "aligned": len(aligned),
-            "leaks": len(unaligned),
-            "uncorroborated": len(uncorroborated),
-            "ctime": len(ctime_hits),
-            "fresh": len(fresh),
-            "order": len(order_hits),
-        }
-        aligned_check = Check("trace.aligned", align_status, align_why, evidence)
-
-        return [
-            artefacts_check,
-            aligned_check,
-            corroborated,
-            ctime_check,
-            directory_check,
-            fresh_check,
-            order_check,
-            self._readable_check(),
-        ]
-
-    def facts(self) -> Dict[str, object]:
-        facts: Dict[str, object] = {
-            "root": self.root,
-            "artifacts": len(self.artifacts),
-            "weak_claims": len(self.weak),
-            "truncated_files": self.truncated_files,
-            "scan": list(self.scan),
-        }
-        facts.update(self.counts)
-        facts["errors"] = [err.to_dict() for err in self.errors]
-        return facts
+def facts(obs: Observations) -> Dict[str, object]:
+    hits = obs.hits
+    return {
+        "root": obs.root,
+        "artifacts": len(obs.artifacts),
+        "weak_claims": len(obs.weak),
+        "truncated_files": obs.truncated_files,
+        "scan": list(obs.scan),
+        "aligned": len(hits.aligned),
+        "leaks": len(hits.leaked),
+        "uncorroborated": len(hits.uncorroborated),
+        "ctime": len(hits.ctime),
+        "fresh": len(hits.fresh),
+        "order": len(hits.order),
+        "errors": [err.to_dict() for err in obs.errors],
+    }
 
 
 def run(
@@ -531,14 +689,12 @@ def run(
     now_ms: Optional[int] = None,
     broad: bool = False,
 ) -> Report:
-    scanner = Scanner(
+    obs = observe(
         root,
-        scan=scan or DEFAULT_SCAN,
-        markers=markers or DEFAULT_MARKERS,
+        scan=scan,
+        markers=markers,
         fresh_window_s=fresh_window_s,
+        now_ms=now_ms,
         broad=broad,
     )
-    scanner.discover()
-    if now_ms is None:
-        now_ms = int(__import__("time").time() * 1000)
-    return Report("trace", scanner.checks(now_ms), scanner.facts())
+    return Report("trace", checks(obs), facts(obs))

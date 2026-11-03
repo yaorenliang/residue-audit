@@ -251,9 +251,9 @@ class TraceADomainControls(unittest.TestCase):
         for name in ("space-eq", "indented", "dashed"):
             self._write(root, "usr/local/bin/" + name, "ELF\n")
 
-        scanner = trace.Scanner(root)
-        scanner.discover()
-        claimed = set(os.path.basename(p) for p in scanner.artifacts + scanner.weak)
+        obs = trace.observe(root, now_ms=fx.LATER_MS)
+        claimed = {os.path.basename(art.path) for art in obs.artifacts}
+        claimed |= {os.path.basename(path) for path in obs.weak}
         # the unit itself carries the marker; the three binaries are the point
         self.assertTrue({"space-eq", "indented", "dashed"} <= claimed)
         self.assertIn("zz-forms.service", claimed)
@@ -283,10 +283,10 @@ class TraceADomainControls(unittest.TestCase):
         os.makedirs(os.path.dirname(link))
         os.symlink(target, link)
 
-        scanner = trace.Scanner(root)
-        scanner.discover()
-        self.assertIn(link, scanner.artifacts)
-        self.assertTrue(scanner.marker_hits[link].endswith("via=symlink"))
+        obs = trace.observe(root, now_ms=fx.LATER_MS)
+        claims = {art.path: art.marker for art in obs.artifacts}
+        self.assertIn(link, claims)
+        self.assertTrue(claims[link].endswith("via=symlink"))
 
     def test_f05_a_symlinked_unit_carries_the_marker_too(self):
         root = os.path.join(self.tmp, "alias-unit")
@@ -300,13 +300,13 @@ class TraceADomainControls(unittest.TestCase):
         os.makedirs(os.path.dirname(link))
         os.symlink(unit, link)
 
-        scanner = trace.Scanner(root)
-        scanner.discover()
+        obs = trace.observe(root, now_ms=fx.LATER_MS)
+        claims = {art.path: art.marker for art in obs.artifacts}
         self.assertEqual(
-            sorted(os.path.basename(p) for p in scanner.artifacts),
+            sorted(os.path.basename(p) for p in claims),
             ["real-client", "zz-real.service", "zzz-enabled.service"],
         )
-        self.assertEqual(scanner.marker_hits[binary], "unit:execstart")
+        self.assertEqual(claims[binary], "unit:execstart")
 
 
 if __name__ == "__main__":
