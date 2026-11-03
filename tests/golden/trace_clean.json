@@ -146,6 +146,7 @@
   "command": "trace",
   "exit_code": 2,
   "facts": {
+    "absolute_links": 0,
     "aligned": 5,
     "artifacts": 5,
     "ctime": 5,
@@ -162,7 +163,8 @@
     ],
     "truncated_files": 0,
     "uncorroborated": 0,
-    "weak_claims": 0
+    "weak_claims": 0,
+    "weak_paths": []
   },
   "status": "fail"
 }

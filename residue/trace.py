@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from . import stat_io
+from . import inside, stat_io
 from .model import FAIL, PASS, PARTIAL, SKIP, Check, Evidence, Report
 
 DEFAULT_SCAN = (
@@ -165,9 +165,10 @@ class Observations:
     artifacts: Tuple[ArtifactObs, ...]
     dirs: Tuple[DirObs, ...]
     hits: Hits
-    weak: Tuple[str, ...]
-    errors: Tuple[stat_io.StatError, ...]
-    truncated_files: int
+    weak: Dict[str, str] = field(default_factory=dict)
+    errors: Tuple[stat_io.StatError, ...] = ()
+    truncated_files: int = 0
+    absolute_links: int = 0
 
 
 @dataclass
@@ -181,7 +182,8 @@ class _Scratch:
     members: List[str] = field(default_factory=list)
     heads: Dict[str, Tuple[str, bool]] = field(default_factory=dict)
     claims: Dict[str, str] = field(default_factory=dict)
-    weak: List[str] = field(default_factory=list)
+    weak: Dict[str, str] = field(default_factory=dict)
+    absolute_links: int = 0
     errors: List[stat_io.StatError] = field(default_factory=list)
     truncated_files: int = 0
     listed: bool = False
@@ -205,6 +207,17 @@ def _members(scratch: _Scratch) -> List[str]:
     return scratch.members
 
 
+def _weak(scratch: _Scratch, path: str, why: str) -> None:
+    """Record one candidate we did not audit, once.
+
+    A dict costs nothing and removes the whole class of double counting: the
+    marker pass and the claim pass both used to append the same path, so a report
+    printed "+2 weak claim(s)" about a single file. The reason travels with the
+    path because a count nobody can name is not a lead.
+    """
+    scratch.weak.setdefault(path, why)
+
+
 def _head(scratch: _Scratch, path: str) -> Tuple[str, bool]:
     """(text, truncated) for one scanned file, read at most once.
 
@@ -214,7 +227,7 @@ def _head(scratch: _Scratch, path: str) -> Tuple[str, bool]:
     """
     cached = scratch.heads.get(path)
     if cached is None:
-        text, truncated, err = stat_io.read_head(path)
+        text, truncated, err = stat_io.read_head(path, root=scratch.root)
         _record(scratch, err)
         if truncated:
             scratch.truncated_files += 1
@@ -242,7 +255,7 @@ def _marker_units(scratch: _Scratch) -> Tuple[List[str], set]:
             if truncated:
                 # the marker may sit past the read window: not audited, not
                 # cleared, and not silently excluded from the count
-                scratch.weak.append(path)
+                _weak(scratch, path, "cut off before the end of the file")
             continue
         units.append(path)
         for line in head.splitlines():
@@ -299,18 +312,33 @@ def _broad_claim(scratch: _Scratch, path: str, names: set) -> Optional[str]:
     return None
 
 
+def _absolute_link(path: str) -> bool:
+    """Whether a link's target is written as an absolute path.
+
+    systemd writes absolute targets, and a relative one resolves to the same place
+    on any host. Only the absolute form needs the image to stand in for /.
+    """
+    try:
+        return os.readlink(path).startswith(os.sep)
+    except OSError:
+        return False
+
+
 def _claim(scratch: _Scratch) -> None:
     """Decide which scanned paths are claims, and record the rest as weak or idle."""
     units, targets = _marker_units(scratch)
     names = _broad_names(scratch, targets)
     for path in _members(scratch):
         reason = _strong_claim(scratch, path, units, targets)
+        _, truncated = _head(scratch, path)
+        if truncated:
+            # stopping before the end of a file is a gap in the measurement, and
+            # it stays one whether or not the part we read happened to be enough
+            _weak(scratch, path, "cut off before the end of the file")
         if reason is None:
-            _, truncated = _head(scratch, path)
             if truncated:
                 # "not ours" is a claim we did not earn when we stopped reading
                 # before the end of the file
-                scratch.weak.append(path)
                 continue
             # A file the broad rule would have claimed is a candidate we are
             # deliberately not auditing. Everything else - ordinary system files -
@@ -320,15 +348,18 @@ def _claim(scratch: _Scratch) -> None:
             if broad is None:
                 continue
             if not scratch.broad:
-                scratch.weak.append(path)
+                _weak(scratch, path, "named by a unit, not audited without --broad")
                 continue
             reason = "broad:" + broad
-        if os.path.islink(path):
+        if inside.is_link(path):
             # a link is how systemd enables a unit: the link is the artifact as
             # much as what it points at, and the reader should see which
             reason = reason + " via=symlink"
+            if _absolute_link(path):
+                # an absolute target means "inside this image", which is not what
+                # the host would resolve: the path was read through our mapping
+                scratch.absolute_links += 1
         scratch.claims[path] = reason
-    scratch.weak.sort()
 
 
 def _stamp(scratch: _Scratch) -> Tuple[ArtifactObs, ...]:
@@ -499,9 +530,10 @@ def observe(
         artifacts,
         dirs,
         _hits(dirs, now_ms, fresh_window_s),
-        tuple(scratch.weak),
+        dict(scratch.weak),
         tuple(scratch.errors),
         scratch.truncated_files,
+        scratch.absolute_links,
     )
 
 
@@ -513,6 +545,16 @@ def observe(
 
 def _check_artifacts(obs: Observations) -> Check:
     if not obs.artifacts:
+        if obs.weak:
+            # an empty artifact list is only an answer when everything was read:
+            # candidates we stopped reading are a gap wearing a clean tree's clothes
+            return Check(
+                "trace.artifacts",
+                PARTIAL,
+                "no artifact matched the marker set, but %d candidate(s) were never read to "
+                "the end; the empty answer covers the readable subset only" % len(obs.weak),
+                [Evidence(shown, "not_audited", why) for shown, why in _weak_evidence(obs)],
+            )
         return Check(
             "trace.artifacts",
             SKIP,
@@ -521,12 +563,16 @@ def _check_artifacts(obs: Observations) -> Check:
     why = "%d artifact(s) matched the marker set" % len(obs.artifacts)
     if obs.weak:
         why += " (+%d weak claim(s) not audited)" % len(obs.weak)
-    return Check(
-        "trace.artifacts",
-        PASS,
-        why,
-        [Evidence(art.shown, "marker", art.marker) for art in obs.artifacts],
-    )
+    evidence = [Evidence(art.shown, "marker", art.marker) for art in obs.artifacts]
+    if obs.truncated_files:
+        return Check(
+            "trace.artifacts",
+            PARTIAL,
+            why + "; %d file(s) were cut off at the read window, so the set itself is "
+            "incomplete" % obs.truncated_files,
+            evidence,
+        )
+    return Check("trace.artifacts", PASS, why, evidence)
 
 
 def _check_aligned(obs: Observations) -> Check:
@@ -577,21 +623,44 @@ def _check_corroborated(obs: Observations) -> Check:
     )
 
 
+def _weak_evidence(obs: Observations) -> List[Tuple[str, str]]:
+    """(shown path, reason) for every candidate the pass did not finish."""
+    shown = {art.path: art.shown for art in obs.artifacts}
+    return [
+        (shown.get(path, sanitize(path, obs.root)), why)
+        for path, why in sorted(obs.weak.items())
+    ]
+
+
 def _check_readable(obs: Observations) -> Check:
-    if not obs.errors:
+    gaps: List[str] = []
+    if obs.errors:
+        gaps.append("%d path(s) unreadable" % len(obs.errors))
+    if obs.truncated_files:
+        gaps.append("%d file(s) cut off at the read window" % obs.truncated_files)
+    if obs.absolute_links:
+        gaps.append(
+            "%d absolute link(s) resolved inside the image root, not on the host"
+            % obs.absolute_links
+        )
+    if not gaps:
         return Check(
             "trace.readable",
             PASS,
             "every scanned path was read; no verdict rests on a skipped path",
         )
+    evidence = [
+        Evidence(err.path, "unreadable", "%s: %s" % (err.op, err.err))
+        for err in obs.errors
+    ]
+    evidence.extend(
+        Evidence(shown, "not_read_to_the_end", why) for shown, why in _weak_evidence(obs)
+    )
     return Check(
         "trace.readable",
         PARTIAL,
-        "%d path(s) unreadable; verdict covers the readable subset only" % len(obs.errors),
-        [
-            Evidence(err.path, "unreadable", "%s: %s" % (err.op, err.err))
-            for err in obs.errors
-        ],
+        "%s; verdict covers the readable subset only" % ", ".join(gaps),
+        evidence,
     )
 
 
@@ -698,7 +767,9 @@ def facts(obs: Observations) -> Dict[str, object]:
         "root": obs.root,
         "artifacts": len(obs.artifacts),
         "weak_claims": len(obs.weak),
+        "weak_paths": [shown for shown, _ in _weak_evidence(obs)],
         "truncated_files": obs.truncated_files,
+        "absolute_links": obs.absolute_links,
         "scan": list(obs.scan),
         "aligned": len(hits.aligned),
         "leaks": len(hits.leaked),

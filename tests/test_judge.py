@@ -51,7 +51,7 @@ def seen(dirs, errors=(), weak=(), truncated=0, window=120):
         tuple(one for group in dirs for one in group.artifacts),
         dirs,
         trace._hits(dirs, NOW, window),
-        tuple(weak),
+        {path: "not audited" for path in weak},
         tuple(errors),
         truncated,
     )

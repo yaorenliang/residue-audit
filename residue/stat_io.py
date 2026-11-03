@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import errno
 import os
+import stat as stat_mod
 from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Optional, Tuple
+
+from . import inside
 
 MS = 1_000_000
 
@@ -52,11 +55,17 @@ def _collect(errors: Optional[List[StatError]], err: Optional[StatError]) -> Non
 
 @dataclass(frozen=True)
 class Stat:
-    """The three stamps one lstat answers, so they cannot describe two files."""
+    """Everything one lstat answers, so the answers cannot describe two files."""
 
     mtime_ms: int
     ctime_ms: int
     ino: int
+    mode: int = 0
+
+    @property
+    def is_regular(self) -> bool:
+        """A plain file, not a link and not a directory."""
+        return stat_mod.S_ISREG(self.mode)
 
 
 def stat_of(path: str) -> Tuple[Optional[Stat], Optional[StatError]]:
@@ -72,7 +81,10 @@ def stat_of(path: str) -> Tuple[Optional[Stat], Optional[StatError]]:
         info = os.lstat(path)
     except OSError as exc:
         return None, stat_error(path, "stat", exc)
-    return Stat(info.st_mtime_ns // MS, info.st_ctime_ns // MS, info.st_ino), None
+    return (
+        Stat(info.st_mtime_ns // MS, info.st_ctime_ns // MS, info.st_ino, info.st_mode),
+        None,
+    )
 
 
 def set_mtime_ms(path: str, value_ms: int) -> None:
@@ -88,23 +100,27 @@ def set_mtime_ms(path: str, value_ms: int) -> None:
     os.utime(path, ns=(value_ns, value_ns))
 
 
-def is_file(path: str) -> bool:
-    """A regular file, not a symlink: the only thing that can be a sibling."""
-    return os.path.isfile(path) and not os.path.islink(path)
+def is_member(path: str, root: Optional[str] = None) -> Tuple[bool, Optional[StatError]]:
+    """Scan membership: a regular file, or a link that resolves to one inside root.
 
-
-def is_dir(path: str) -> bool:
-    return os.path.isdir(path)
-
-
-def is_member(path: str) -> bool:
-    """Scan membership: a regular file, or a symlink that resolves to one.
-
-    systemd enables a unit by symlinking it, and a link that is not followed is
-    an artifact the tool would report as absent. Membership follows the link;
-    the sibling cap does not (see dir_stats).
+    systemd enables a unit by symlinking it, and a link that is not followed is an
+    artifact the tool would report as absent. The link is followed *inside the
+    image* (see inside.resolve): a target with no counterpart under root is a named
+    gap, not a reason to read the host's copy. The sibling cap does not follow
+    links (see dir_stats).
     """
-    return os.path.isfile(path)
+    if root is None:
+        if not os.path.isfile(path):
+            return False, None
+        info, err = stat_of(path)
+        return (info is not None and info.is_regular), err
+    real, why = inside.resolve(root, path)
+    if real is None:
+        return False, StatError(path, "resolve", why or "unresolvable link")
+    info, err = stat_of(real)
+    if info is None:
+        return False, err
+    return info.is_regular, None
 
 
 def listdir_sorted(path: str) -> Tuple[List[str], Optional[StatError]]:
@@ -123,49 +139,77 @@ def listdir_sorted(path: str) -> Tuple[List[str], Optional[StatError]]:
         return [], stat_error(path, "listdir", exc)
 
 
-def read_head(path: str, limit: int = READ_LIMIT) -> Tuple[str, bool, Optional[StatError]]:
+def read_head(
+    path: str, limit: int = READ_LIMIT, root: Optional[str] = None
+) -> Tuple[str, bool, Optional[StatError]]:
     """First limit bytes as text, whether the file is longer, and the error.
 
     The truncation flag travels with the text because a marker past the window is
-    not a file without a marker: the caller has to say what it did not read.
+    not a file without a marker: the caller has to say what it did not read. With a
+    root, the path is read through inside.resolve first, so a link cannot pull a
+    host file into evidence about the image.
     """
+    target = path
+    if root is not None:
+        real, why = inside.resolve(root, path)
+        if real is None:
+            return "", False, StatError(path, "resolve", why or "unresolvable link")
+        target = real
     try:
-        with open(path, "rb") as fh:
+        with open(target, "rb") as fh:
             data = fh.read(limit + 1)
     except OSError as exc:
         return "", False, stat_error(path, "read", exc)
     return data[:limit].decode("utf-8", "replace"), len(data) > limit, None
 
 
-def dir_entries(path: str) -> Tuple[Dict[str, List[str]], Optional[StatError]]:
-    """Names directly in path, split into files, symlinks and directories."""
+def dir_entries(path: str) -> Tuple[Dict[str, List[str]], List[StatError]]:
+    """Names directly in path, split by their own type, plus every failure.
+
+    Each entry is stated on its own instead of asking three predicate helpers:
+    os.path.isdir/isfile return False when they cannot stat, so a directory that
+    can be listed but not searched turned every entry in it into a non-event. The
+    names were visible to the auditor, so they have to appear here as either a
+    group or an error - never as silence.
+    """
     names, err = listdir_sorted(path)
     groups: Dict[str, List[str]] = {"files": [], "symlinks": [], "dirs": []}
+    errors: List[StatError] = [err] if err is not None else []
     for name in names:
         full = os.path.join(path, name)
-        if os.path.islink(full):
+        info, entry_err = stat_of(full)
+        if info is None:
+            if entry_err is not None:
+                errors.append(entry_err)
+            continue
+        if stat_mod.S_ISLNK(info.mode):
             groups["symlinks"].append(name)
-        elif os.path.isdir(full):
+        elif stat_mod.S_ISDIR(info.mode):
             groups["dirs"].append(name)
-        elif os.path.isfile(full):
+        elif stat_mod.S_ISREG(info.mode):
             groups["files"].append(name)
-    return groups, err
+    return groups, errors
 
 
 def walk_files(root: str, rel_dir: str) -> Tuple[List[str], List[StatError]]:
-    """Scan members directly inside root/rel_dir (no recursion), plus list errors.
+    """Scan members directly inside root/rel_dir (no recursion), plus every failure.
 
-    Members are regular files plus symlinks that resolve to one. Both are visible
-    to ls, so both have to be visible here.
+    Members are regular files plus links that resolve to one *inside root*. Both
+    are visible to ls, so both have to be visible here - and a link that could not
+    be resolved inside the image is reported instead of being dropped.
     """
     base = os.path.join(root, rel_dir)
     names, err = listdir_sorted(base)
     paths: List[str] = []
+    errors: List[StatError] = [err] if err is not None else []
     for name in names:
         full = os.path.join(base, name)
-        if is_member(full):
+        member, member_err = is_member(full, root)
+        if member_err is not None:
+            errors.append(member_err)
+        if member:
             paths.append(full)
-    return paths, [err] if err is not None else []
+    return paths, errors
 
 
 def dir_stats(
@@ -182,8 +226,9 @@ def dir_stats(
     behind, and it has to be something the attacker did not create.
     """
     norm_ours = {os.path.normpath(item) for item in (ours or set())}
-    groups, err = dir_entries(path)
-    _collect(errors, err)
+    groups, entry_errors = dir_entries(path)
+    for entry_err in entry_errors:
+        _collect(errors, entry_err)
     cap = 0
     cap_ctime = 0
     max_ino = 0
@@ -201,5 +246,3 @@ def dir_stats(
         cap_ctime = max(cap_ctime, info.ctime_ms)
         max_ino = max(max_ino, info.ino)
     return cap, cap_ctime, max_ino, count
-
-

@@ -103,7 +103,9 @@ class TraceNegativeControls(unittest.TestCase):
             fh.write("ELF stock\n")
 
         status, report = self._status(root, now_ms=fx.LATER_MS)
-        self.assertEqual(status["trace.artifacts"], SKIP)
+        # nothing was claimed, but two candidates (the unit and the binary it names)
+        # were never read: SKIP would say the host has nothing to look at
+        self.assertEqual(status["trace.artifacts"], PARTIAL)
         self.assertEqual(report.facts["artifacts"], 0)
         self.assertEqual(report.facts["weak_claims"], 2)
 
@@ -235,7 +237,9 @@ class TraceADomainControls(unittest.TestCase):
         )
         status, report = self._status(root, now_ms=fx.LATER_MS)
         self.assertEqual(report.facts["artifacts"], 0)
-        self.assertEqual(status["trace.artifacts"], SKIP)
+        # a comment claims nothing, but the binary the unit names was never read:
+        # an empty set over candidates we stopped short of is a gap, not a clean host
+        self.assertEqual(status["trace.artifacts"], PARTIAL)
 
     # -- F-22: every accepted ExecStart= spelling --------------------------
     def test_f22_every_exec_start_spelling_names_its_binary(self):
@@ -273,7 +277,10 @@ class TraceADomainControls(unittest.TestCase):
         self.assertEqual(report.facts["artifacts"], 0)
         self.assertEqual(report.facts["weak_claims"], 1)
         self.assertEqual(report.facts["truncated_files"], 1)
-        self.assertEqual(status["trace.readable"], PASS)
+        self.assertEqual(len(report.facts["weak_paths"]), 1)
+        self.assertTrue(report.facts["weak_paths"][0].endswith("usr/libexec/kworker"))
+        # a file cut off at the window was not read: the pass did not finish its work
+        self.assertEqual(status["trace.readable"], PARTIAL)
 
     # -- F-05: a symlink is how systemd enables a unit ---------------------
     def test_f05_a_symlink_to_a_marked_file_is_claimed_and_marked(self):
