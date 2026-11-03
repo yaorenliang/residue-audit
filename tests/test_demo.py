@@ -10,6 +10,7 @@ the repository alone.
 from __future__ import annotations
 
 import io
+import json
 import os
 import unittest
 
@@ -86,6 +87,30 @@ class DemoIsASubcommand(unittest.TestCase):
             cli.sys.stdout = real
         payload = stream.getvalue()
         self.assertIn('"command": "demo"', payload)
+
+
+class DemoJsonIsOneDocument(unittest.TestCase):
+    """With --json the prose is not part of stdout: one stream, one document."""
+
+    def test_f10_demo_json_stdout_parses_and_carries_the_report(self):
+        out, err = io.StringIO(), io.StringIO()
+        real_out, real_err = cli.sys.stdout, cli.sys.stderr
+        cli.sys.stdout, cli.sys.stderr = out, err
+        try:
+            code = cli.main(["--json", "demo"])
+        finally:
+            cli.sys.stdout, cli.sys.stderr = real_out, real_err
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["command"], "demo")
+        self.assertIn("checks", payload)
+        self.assertIn("status", payload)
+        self.assertIn("### borrowed.", err.getvalue())
+        self.assertLess(code, EXIT["error"])
+
+    def test_f10_the_sections_go_to_the_stream_the_caller_names(self):
+        stream = io.StringIO()
+        demo.run(stream)
+        self.assertIn("### borrowed.", stream.getvalue())
 
 
 if __name__ == "__main__":

@@ -183,8 +183,9 @@ def _dispatch(args: argparse.Namespace) -> Any:
         return dwell_mod.run(args.ledger, args.hits)
     if args.command == "demo":
         # sections print as they run; the returned report is the aggregate, so
-        # the process exit code still answers "did every section behave?"
-        return demo_mod.run(sys.stdout)
+        # the process exit code still answers "did every section behave?" With
+        # --json the prose moves to stderr: stdout has to stay one document
+        return demo_mod.run(sys.stderr if args.json else sys.stdout)
     return batch_mod.run(args.features, args.threshold)
 
 

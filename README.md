@@ -236,6 +236,13 @@ The short version:
   cannot list lands in `facts.errors` and downgrades `trace.readable` to `partial`.
   Before this existed, `chmod 000` on a scanned directory made the audit return
   "nothing to audit" with no mention of the failure.
+* **`--scan` narrows where claims are filed, not where the anchor is.** Anchors come
+  from the marker-bearing units the tool can reach, including the default
+  directories, because reading a unit to learn which binary the implant starts files
+  no claim of its own. `--scan etc/cron.d` therefore still finds a cron entry that
+  names our binary, and still claims nothing outside `etc/cron.d`.
+* **`demo --json` keeps one stream machine-readable.** The six sections are prose,
+  so with `--json` they go to stderr and stdout carries the report document alone.
 * **`ctime` proves the file changed after its neighbours**, not who changed it.
   A package upgrade leaves the same signal.
 * **Inode order is a floor.** Reuse after deletion blunts it.

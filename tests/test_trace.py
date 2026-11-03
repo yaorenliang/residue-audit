@@ -332,5 +332,52 @@ class TraceADomainControls(unittest.TestCase):
         self.assertEqual(claims[binary], "unit:execstart")
 
 
+class TheAnchorOutlivesTheScan(unittest.TestCase):
+    """A scanned directory says where claims are filed, not where the anchor is.
+
+    Anchors used to come from the unit files inside the scanned set, so --scan
+    etc/cron.d found no unit, hence no ExecStart= target, hence no claim, and
+    answered nothing to audit about a tree whose full scan claims artifacts.
+    """
+
+    SERVICE = "[Service]\nExecStart=/usr/libexec/kworker\nKillSignal=SIGCONT\n"
+    CRON = "*/5 * * * * root /usr/libexec/kworker --quiet\n"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-trace-scan-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = os.path.join(self.tmp, "image")
+        for rel in ("etc/systemd/system", "etc/cron.d", "usr/libexec"):
+            os.makedirs(os.path.join(self.root, rel))
+        self._write("etc/systemd/system/updater.service", self.SERVICE)
+        self._write("etc/cron.d/updater", self.CRON)
+        self._write("usr/libexec/kworker", "ELF\n")
+
+    def _write(self, rel, body):
+        with open(os.path.join(self.root, rel), "w", encoding="utf-8") as fh:
+            fh.write(body)
+
+    def _claims(self, scan=None):
+        obs = trace.observe(self.root, scan=scan, now_ms=fx.LATER_MS)
+        return [(art.shown, art.marker) for art in obs.artifacts]
+
+    def test_a_narrowed_scan_still_claims_what_it_can_see(self):
+        self.assertEqual(self._claims(scan=("etc/cron.d",)),
+                         [("<root>/etc/cron.d/updater", "content:kworker")])
+
+    def test_the_full_scan_finds_the_unit_its_target_and_the_entry(self):
+        self.assertEqual(self._claims(), [
+            ("<root>/etc/cron.d/updater", "content:kworker"),
+            ("<root>/etc/systemd/system/updater.service", "unit:marker"),
+            ("<root>/usr/libexec/kworker", "unit:execstart"),
+        ])
+
+    def test_a_narrowed_scan_files_no_claim_from_outside_itself(self):
+        obs = trace.observe(self.root, scan=("etc/cron.d",), now_ms=fx.LATER_MS)
+        inside = os.path.join(self.root, "etc", "cron.d") + os.sep
+        self.assertTrue(obs.artifacts)
+        self.assertTrue(all(art.path.startswith(inside) for art in obs.artifacts))
+
+
 if __name__ == "__main__":
     unittest.main()

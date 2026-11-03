@@ -79,9 +79,15 @@ def _discordant_hits(tmp: str) -> str:
     return path
 
 
-def run(stdout=None) -> Report:
-    """Print every section and return the report the entry point should exit on."""
-    out = stdout or sys.stdout
+def run(prose=None) -> Report:
+    """Print every section to prose, and return the report to exit on.
+
+    The human sections go to the stream the caller names, because with --json the
+    caller needs stdout to carry one machine-readable document: sections written
+    into stdout made the json a suffix of a human report, and json.loads failed
+    on the first character of it.
+    """
+    out = prose or sys.stdout
     tmp = tempfile.mkdtemp(prefix="residue-demo-")
     checks: List[Check] = []
     facts: Dict[str, Any] = {"sections": [], "verdicts": {}}

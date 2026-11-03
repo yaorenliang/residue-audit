@@ -179,14 +179,13 @@ class _Scratch:
     scan: Tuple[str, ...]
     markers: Tuple[str, ...]
     broad: bool
-    members: List[str] = field(default_factory=list)
     heads: Dict[str, Tuple[str, bool]] = field(default_factory=dict)
     claims: Dict[str, str] = field(default_factory=dict)
     weak: Dict[str, str] = field(default_factory=dict)
     absolute_links: int = 0
     errors: List[stat_io.StatError] = field(default_factory=list)
     truncated_files: int = 0
-    listed: bool = False
+    listed: Dict[Tuple[str, ...], List[str]] = field(default_factory=dict)
 
 
 def _record(scratch: _Scratch, err: Optional[stat_io.StatError]) -> None:
@@ -219,16 +218,36 @@ def scan_entry(rel: str) -> str:
     return rel
 
 
-def _members(scratch: _Scratch) -> List[str]:
-    """Scan members, listed once: a directory listed twice can change mid-run."""
-    if not scratch.listed:
-        scratch.listed = True
-        for rel in scratch.scan:
+def _list(scratch: _Scratch, dirs: Sequence[str]) -> List[str]:
+    """One set of directories, listed once: a tree can change between passes."""
+    key = tuple(dirs)
+    cached = scratch.listed.get(key)
+    if cached is None:
+        cached = []
+        for rel in key:
             paths, errors = stat_io.walk_files(scratch.root, rel)
-            scratch.members.extend(paths)
+            cached.extend(paths)
             for err in errors:
                 _record(scratch, err)
-    return scratch.members
+        scratch.listed[key] = cached
+    return cached
+
+
+def _members(scratch: _Scratch) -> List[str]:
+    """What --scan asks us to audit: the only place a claim may be filed."""
+    return _list(scratch, scratch.scan)
+
+
+def _anchor_members(scratch: _Scratch) -> List[str]:
+    """Where a marker-bearing unit may live: the scanned dirs plus the defaults.
+
+    A scanned directory says where to look for artifacts. It does not say where the
+    anchor lives: the unit that carries the marker is what turns an ExecStart= target
+    into a claim, and reading that unit files no claim of its own. Without this, a
+    narrowed --scan found no unit, hence no target, hence no anchor, and answered
+    nothing to audit about a tree whose full scan does claim artifacts.
+    """
+    return _list(scratch, tuple(dict.fromkeys(DEFAULT_SCAN + scratch.scan)))
 
 
 def _weak(scratch: _Scratch, path: str, why: str) -> None:
@@ -271,7 +290,7 @@ def _marker_units(scratch: _Scratch) -> Tuple[List[str], set]:
     """
     units: List[str] = []
     targets = set()
-    for path in _members(scratch):
+    for path in _anchor_members(scratch):
         if not path.endswith(".service"):
             continue
         head, truncated = _head(scratch, path)
@@ -309,7 +328,7 @@ def _strong_claim(
 
 def _broad_names(scratch: _Scratch, targets: set) -> set:
     names = {os.path.basename(t) for t in targets}
-    for path in _members(scratch):
+    for path in _anchor_members(scratch):
         if not path.endswith(".service"):
             continue
         head, _ = _head(scratch, path)
@@ -578,6 +597,17 @@ def _check_artifacts(obs: Observations) -> Check:
                 "no artifact matched the marker set, but %d candidate(s) were never read to "
                 "the end; the empty answer covers the readable subset only" % len(obs.weak),
                 [Evidence(shown, "not_audited", why) for shown, why in _weak_evidence(obs)],
+            )
+        if obs.errors:
+            # an anchor we could not read is a gap in the same sense: the set
+            # looked empty because part of the tree was never listed
+            return Check(
+                "trace.artifacts",
+                PARTIAL,
+                "no artifact matched the marker set, but %d path(s) could not be "
+                "read; the empty answer covers the readable subset only"
+                % len(obs.errors),
+                [Evidence(err.path, err.op, err.err) for err in obs.errors[:3]],
             )
         return Check(
             "trace.artifacts",

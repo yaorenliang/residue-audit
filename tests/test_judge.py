@@ -207,6 +207,14 @@ class JudgeTest(unittest.TestCase):
         obs = seen([held("/r/usr/libexec", [art("/r/usr/libexec/kworker")])])
         self.assertIn("all 1 artifact(s) are no newer", status_of(obs, "trace.aligned").why)
 
+    def test_an_empty_set_with_unreadable_paths_is_partial(self):
+        err = stat_io.StatError("/r/etc", "list", "Permission denied")
+        check = status_of(seen([], errors=[err]), "trace.artifacts")
+        self.assertEqual(check.status, model.PARTIAL)
+        self.assertIn("1 path(s) could not be read", check.why)
+        self.assertEqual([(one.path, one.field) for one in check.evidence],
+                         [("/r/etc", "list")])
+
 
 if __name__ == "__main__":
     unittest.main()
