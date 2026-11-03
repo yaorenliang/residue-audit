@@ -421,6 +421,16 @@ def _fresh(
     )
 
 
+def _newer_than_siblings(art: ArtifactObs, group: DirObs) -> bool:
+    """The one comparison behind alignment: this artifact against its neighbours.
+
+    Named so that the pass which sorts artifacts into aligned and leaked, and the
+    judge that rebuilds the evidence for that answer, cannot drift apart: two copies
+    of a comparison is how a report ends up explaining a verdict it did not reach.
+    """
+    return art.stamp is not None and art.stamp.mtime_ms > group.cap_mtime_ms
+
+
 def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
     """Sort every artifact into the answers it supports. No verdicts here."""
     aligned: List[ArtifactObs] = []
@@ -442,7 +452,7 @@ def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
                 # nothing to be "no newer than": a pass here would be an
                 # assumption wearing a verdict's clothes
                 continue
-            if stamp.mtime_ms > group.cap_mtime_ms:
+            if _newer_than_siblings(art, group):
                 leaked.append(art)
             else:
                 aligned.append(art)
@@ -533,7 +543,7 @@ def _check_aligned(obs: Observations) -> Check:
         if group.neighbours == 0:
             continue
         for art in group.artifacts:
-            if art.stamp is not None and art.stamp.mtime_ms > group.cap_mtime_ms:
+            if _newer_than_siblings(art, group):
                 evidence.append(Evidence(art.shown, "mtime_ms", str(art.stamp.mtime_ms)))
         evidence.append(Evidence(group.shown, "neighbour_cap_ms", str(group.cap_mtime_ms)))
     if not hits.leaked:
