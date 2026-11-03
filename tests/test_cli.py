@@ -153,6 +153,25 @@ class ArgumentDomainTests(CliCase):
         self.assertIn("relative", err, "the message must ask for a relative directory: %r" % err)
         self.assertIn("etc/systemd/system", err, "the message must show the shape of a valid value: %r" % err)
 
+    def test_f05_a_parent_component_walks_out_of_the_root(self):
+        outside = os.path.join(os.path.dirname(self.root), "sibling")
+        if not os.path.isdir(outside):
+            os.makedirs(outside)
+        write_file(os.path.join(outside, "escape.cron"), MARKER_UNIT)
+        code, out, err = run_main(["trace", self.root, "--scan", "../sibling"])
+        self.assertEqual(4, code, "--scan ../sibling audited another tree and exited %d" % code)
+        self.assertIn("walks out of the root", err)
+        self.assertIn("etc/cron.d", err, "the message must show the shape of a valid value: %r" % err)
+
+    def test_f05_a_scan_entry_inside_the_root_still_runs(self):
+        code, out, err = run_main(["trace", self.plant(), "--scan", "etc/cron.d"])
+        self.assertNotEqual(4, code, "a subtree inside the root is a normal scan, exited 4: %s" % err)
+
+    def test_f05_an_empty_scan_entry_is_rejected(self):
+        code, out, err = run_main(["trace", self.root, "--scan", ""])
+        self.assertEqual(4, code, "an empty --scan selected the whole root and exited %d" % code)
+        self.assertIn("needs a name", err)
+
     def test_f11_threshold_outside_the_unit_interval_is_rejected(self):
         left = self.features("left", ["x", "y"])
         right = self.features("right", ["x", "y"])

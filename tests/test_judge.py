@@ -192,6 +192,21 @@ class JudgeTest(unittest.TestCase):
         for name, verdict in trace.HIT_VERDICT.items():
             self.assertEqual(status_of(obs, "trace." + name).status, verdict, name)
 
+    def test_alignment_counts_only_the_artifacts_it_compared(self):
+        obs = seen([
+            held("/r/usr/libexec", [art("/r/usr/libexec/kworker", mtime_ms=1000)], neighbours=2),
+            held("/r/var/tmp", [art("/r/var/tmp/loader", mtime_ms=1000)], neighbours=0),
+        ])
+        check = status_of(obs, "trace.aligned")
+        self.assertEqual(check.status, model.PASS)
+        self.assertIn("all 1 compared artifact(s)", check.why)
+        self.assertIn("1 artifact(s) had no sibling to compare against", check.why)
+        self.assertNotIn("all 2", check.why, "nothing in the empty group was compared")
+
+    def test_a_fully_compared_tree_still_says_all_of_them(self):
+        obs = seen([held("/r/usr/libexec", [art("/r/usr/libexec/kworker")])])
+        self.assertIn("all 1 artifact(s) are no newer", status_of(obs, "trace.aligned").why)
+
 
 if __name__ == "__main__":
     unittest.main()

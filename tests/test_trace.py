@@ -140,6 +140,22 @@ class TraceADomainControls(unittest.TestCase):
             fh.write(body)
         return path
 
+    # -- F-05: a scanned directory names a tree inside the root, or nothing --
+    def test_f05_observe_refuses_a_scan_entry_that_leaves_the_root(self):
+        with self.assertRaises(ValueError) as caught:
+            trace.observe(self.tmp, scan=("../sibling",))
+        self.assertIn("walks out of the root", str(caught.exception))
+
+    def test_f05_observe_refuses_an_absolute_scan_entry(self):
+        with self.assertRaises(ValueError) as caught:
+            trace.observe(self.tmp, scan=("/etc/cron.d",))
+        self.assertIn("absolute", str(caught.exception))
+
+    def test_f05_observe_refuses_an_empty_scan_entry(self):
+        with self.assertRaises(ValueError) as caught:
+            trace.observe(self.tmp, scan=("",))
+        self.assertIn("needs a name", str(caught.exception))
+
     # -- F-02: a path we could not read is not a path that is not there -----
     def test_f02_an_unreadable_scan_directory_is_reported(self):
         root = os.path.join(self.tmp, "locked")

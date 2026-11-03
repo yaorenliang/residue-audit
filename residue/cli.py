@@ -67,13 +67,12 @@ def _marker(text: str) -> str:
 
 
 def _relative_dir(text: str) -> str:
-    if os.path.isabs(text):
-        # os.path.join discards the root for an absolute second argument, so an
-        # absolute --scan silently audits a different tree than the one given
-        raise argparse.ArgumentTypeError(
-            "must be a directory relative to the scanned root, e.g. etc/systemd/system (got %r)" % (text,)
-        )
-    return text
+    # One rule, stated in the module that applies it: an absolute path or a
+    # parent component makes the tool audit a tree the caller never named.
+    try:
+        return trace_mod.scan_entry(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
 
 
 def _threshold(text: str) -> float:

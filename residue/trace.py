@@ -195,6 +195,30 @@ def _record(scratch: _Scratch, err: Optional[stat_io.StatError]) -> None:
         scratch.errors.append(err)
 
 
+def scan_entry(rel: str) -> str:
+    """One --scan entry, or a refusal naming the tree it would have audited.
+
+    A scanned subtree is a path under the root. An absolute path and a parent
+    component are not stricter versions of that: os.path.join drops the root for
+    the first, and the second walks out of it, so either one audits a directory
+    the caller never named - and files its verdict under the root it did name.
+    """
+    if not rel.strip():
+        raise ValueError("a scanned directory needs a name; an empty one selects the whole root")
+    if os.path.isabs(rel):
+        raise ValueError(
+            "%r is absolute; a scanned directory is relative to the root, e.g. "
+            "etc/systemd/system, because an absolute path replaces the root instead of "
+            "narrowing it" % rel
+        )
+    if ".." in rel.replace(os.sep, "/").split("/"):
+        raise ValueError(
+            "%r walks out of the root; a scanned directory is a path under it, e.g. "
+            "etc/cron.d, because a parent component reports another tree under this one" % rel
+        )
+    return rel
+
+
 def _members(scratch: _Scratch) -> List[str]:
     """Scan members, listed once: a directory listed twice can change mid-run."""
     if not scratch.listed:
@@ -513,7 +537,7 @@ def observe(
     """One pass: discover claims, read their stamps, and sort them by question."""
     scratch = _Scratch(
         os.path.abspath(root),
-        tuple(scan or DEFAULT_SCAN),
+        tuple(scan_entry(one) for one in (scan or DEFAULT_SCAN)),
         tuple(markers or DEFAULT_MARKERS),
         broad,
     )
@@ -575,9 +599,32 @@ def _check_artifacts(obs: Observations) -> Check:
     return Check("trace.artifacts", PASS, why, evidence)
 
 
+def _comparison_counts(obs: Observations) -> Tuple[int, int]:
+    """How many artifacts were actually compared, and how many had no sibling.
+
+    An alignment claim is only worth the artifacts that were put next to a
+    sibling. A directory with no neighbour produces no comparison at all, so its
+    artifacts cannot be counted under "all N are no newer than a sibling" - the
+    mixed tree said exactly that about two artifacts when it had compared one.
+    """
+    compared = sum(len(group.artifacts) for group in obs.dirs if group.neighbours > 0)
+    return compared, len(obs.artifacts) - compared
+
+
+def _aligned_scope(compared: int, uncompared: int) -> Tuple[str, str]:
+    """The noun phrase for a count, and the note naming who it left out."""
+    if not uncompared:
+        return "%d artifact(s)" % compared, ""
+    return (
+        "%d compared artifact(s)" % compared,
+        "; %d artifact(s) had no sibling to compare against" % uncompared,
+    )
+
+
 def _check_aligned(obs: Observations) -> Check:
     hits = obs.hits
-    total = len(obs.artifacts)
+    compared, uncompared = _comparison_counts(obs)
+    scope, note = _aligned_scope(compared, uncompared)
     if not hits.aligned and not hits.leaked:
         return Check(
             "trace.aligned",
@@ -593,15 +640,16 @@ def _check_aligned(obs: Observations) -> Check:
                 evidence.append(Evidence(art.shown, "mtime_ms", str(art.stamp.mtime_ms)))
         evidence.append(Evidence(group.shown, "neighbour_cap_ms", str(group.cap_mtime_ms)))
     if not hits.leaked:
-        status, why = PASS, "all %d artifact(s) are no newer than a sibling" % total
+        status, why = PASS, "all %s are no newer than a sibling%s" % (scope, note)
     elif hits.aligned:
         status = PARTIAL
-        why = "%d of %d artifact(s) stand out with a mtime newer than every sibling" % (
+        why = "%d of %s stand out with a mtime newer than every sibling%s" % (
             len(hits.leaked),
-            total,
+            scope,
+            note,
         )
     else:
-        status, why = FAIL, "all %d artifact(s) carry a newer mtime than every sibling" % total
+        status, why = FAIL, "all %s carry a newer mtime than every sibling%s" % (scope, note)
     return Check("trace.aligned", status, why, evidence)
 
 
