@@ -28,10 +28,10 @@ trace.ctime            fail     5 artifact(s) have a ctime newer than every sibl
                                   <root>/usr/libexec/kworker ctime_vs_cap=newer
                                   <root>/usr/local/bin/bridge-client-x ctime_vs_cap=newer
 trace.directory_ctime  partial  4 holding director(y/ies) changed after the artifacts they hold: a directory mtime/ctime is the usual hiding place, and it dates the assembly, not the intent
-                                  <root>/etc/cron.d dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
-                                  <root>/etc/systemd/system dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
-                                  <root>/usr/libexec dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
-                                  <root>/usr/local/bin dir_ctime_vs_oldest_mtime=1793628189582 > 1609459200000
+                                  <root>/etc/cron.d dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/etc/systemd/system dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/libexec dir_ctime_vs_oldest_mtime=<now> > 1609459200000
+                                  <root>/usr/local/bin dir_ctime_vs_oldest_mtime=<now> > 1609459200000
 trace.fresh            pass     no artifact carries an mtime within 120s of now
 trace.order            fail     5 artifact(s) have a higher inode than every sibling, so creation order is recoverable
                                   <root>/etc/cron.d/kworkers-updater inode_order=newest
@@ -41,6 +41,7 @@ trace.order            fail     5 artifact(s) have a higher inode than every sib
                                   <root>/usr/local/bin/bridge-client-x inode_order=newest
 trace.readable         pass     every scanned path was read; no verdict rests on a skipped path
 
+absolute_links=0
 aligned=5
 artifacts=5
 ctime=5
@@ -48,11 +49,12 @@ errors=[]
 fresh=0
 leaks=0
 order=5
-root=/var/folders/x9/ftfjbsxx70s1_15hm5lfmvjm0000gn/T/residue-demo-x1hisjkl/leak
+root=<root>
 scan=["etc/systemd/system", "etc/cron.d", "usr/libexec", "usr/local/bin"]
 truncated_files=0
 uncorroborated=0
 weak_claims=0
+weak_paths=[]
 
 summary command=trace status=fail exit=2
 note: order and ctime still fail here. utimensat rewrites a timestamp;
@@ -60,8 +62,10 @@ note: order and ctime still fail here. utimensat rewrites a timestamp;
 ```
 
 `make docs-sample` 会打印本 README 引用的六段 demo（上面这段是第 1 段），
-外加 `--json` 的形状，所以这段文字可以被 diff，而不是被相信。`<root>` 是 demo 在
-`$TMPDIR` 下造的临时树；`directory_ctime` 里的绝对时间来自那一次运行的时钟。
+外加 `--json` 的形状，所以这段文字可以被 diff，而不是被相信。
+`tests/readme_sample.py` 打印上面这段，`tests/test_docs.py` 逐行 diff，引用不会
+悄悄过期：只有两处是替换的——`<root>` 是 demo 在 `$TMPDIR` 下造的临时树，
+`<now>` 是 `directory_ctime` 背后那个墙钟数字。其余全是工具自己的输出。
 
 这段输出里，植入物做了谨慎操作者会做的全部动作：从邻居那里借来时间戳，
 落在本来就有别人的目录里，避开最近两分钟。它在三个地方仍然露着：

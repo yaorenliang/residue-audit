@@ -31,14 +31,19 @@ verify: test cross cov
 	@echo "VERIFY_OK"
 
 # The README sample has to be captured, not hand-written: a hand-written sample
-# drifts from as_text() the first time a column changes. This target prints the
-# six demo sections the README quotes (section 1 verbatim), then the --json shape
-# for the same tree, so a reader can diff instead of trusting.
+# drifts from as_text() the first time a column changes, and the README quotes it.
+# So the first block below is exactly what the README carries - the output of
+# tests/readme_sample.py, which substitutes only <root> and <now> - and
+# tests/test_docs.py diffs it line by line. The rest is the six demo sections and
+# the --json shape for the same tree, so a reader can diff instead of trusting.
 # Both commands below are expected to report a verdict, so their exit code is
 # checked rather than tolerated: the demo stands at fail (2), and so does the
 # clean-tree trace (ctime and order are floors). A drift to any other code is a
 # red target, which is the point of having it.
 docs-sample:
+	@echo '== README block =='
+	@$(PY) tests/readme_sample.py
+	@echo '== six demo sections =='
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	$(PY) -m residue.demo || test $$? -eq 2; \
 	echo '== --json =='; \

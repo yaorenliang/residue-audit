@@ -7,15 +7,19 @@ the host has two failures with one cause: an artifact whose target is present in
 image disappears from the report, and a host file outside the root is read as evidence
 about the image.
 
-So resolution is explicit: follow the chain by hand, read every absolute target as an
-image path, and refuse the whole path when the chain leaves the box. One function,
-one answer: the real path inside the root, or the reason we will not read it.
+So resolution is explicit: walk the path one component at a time, read every absolute
+target as an image path, and refuse the whole path when the chain leaves the box.
+Component by component matters: a link in the middle of a path - a symlinked scan
+directory, a merged-/usr tree where /lib is a link - is resolved by the kernel against
+the host if you hand the whole path to realpath(), and then every file behind it is
+read from the wrong tree. One function, one answer: the real path inside the root, or
+the reason we will not read it.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 # A link chain this deep is not a systemd enablement link; it is a loop or an attack.
 MAX_HOPS = 40
@@ -27,6 +31,18 @@ def _inside(root: str, path: str) -> bool:
     if root == os.sep:
         return path.startswith(os.sep)
     return path == root or path.startswith(root + os.sep)
+
+
+def _parts(root: str, path: str) -> Optional[List[str]]:
+    """The components of path below root, or None when path is not under root."""
+    root = os.path.abspath(root)
+    path = os.path.abspath(path)
+    if not _inside(root, path):
+        return None
+    rel = os.path.relpath(path, root)
+    if rel == ".":
+        return []
+    return [part for part in rel.split(os.sep) if part not in ("", ".")]
 
 
 def _target_of(link: str, root: str) -> str:
@@ -49,38 +65,52 @@ def _target_of(link: str, root: str) -> str:
 def resolve(root: str, path: str) -> Tuple[Optional[str], Optional[str]]:
     """(real path inside root, None) or (None, why we refuse to read it).
 
-    The returned path is the link chain followed to its end, still inside root. A
-    link that points at an absolute path is read as an image path; a link that ends
-    up outside the root - by an absolute target with no counterpart in the image, by
-    enough ".." segments, or by a chain that never terminates - is a named gap.
+    The walk keeps its own stack instead of calling realpath(): every component is
+    looked at, a link anywhere in the path is followed inside the image, and ".."
+    never gets a chance to climb out, because it is refused rather than interpreted.
     """
     root_abs = os.path.abspath(root)
-    current = os.path.abspath(path)
+    todo = _parts(root_abs, path)
+    if todo is None:
+        return None, "%s is not under %s" % (path, os.path.basename(root_abs) or root_abs)
+    current = root_abs
+    hops = 0
     seen = set()
-    for _ in range(MAX_HOPS):
-        if current in seen:
-            return None, "symlink loop at %s" % (current,)
-        seen.add(current)
-        try:
-            link = os.path.islink(current)
-        except OSError as exc:
-            return None, exc.strerror or exc.__class__.__name__
-        if not link:
-            break
-        try:
-            current = _target_of(current, root_abs)
-        except OSError as exc:
-            return None, exc.strerror or exc.__class__.__name__
-    else:
-        return None, "symlink chain longer than %d hops" % (MAX_HOPS,)
-
-    if not os.path.lexists(current):
-        return None, "target %s has no counterpart inside the root" % (current,)
-
-    resolved = os.path.realpath(current)
-    if not _inside(os.path.realpath(root_abs), resolved):
-        return None, "%s resolves outside %s" % (path, os.path.basename(root_abs) or root_abs)
-    return resolved, None
+    while todo:
+        name = todo.pop(0)
+        if name == "..":
+            return None, "%s leaves the root" % (path,)
+        step = os.path.join(current, name)
+        if os.path.islink(step):
+            hops += 1
+            if hops > MAX_HOPS:
+                return None, "symlink chain longer than %d hops" % (MAX_HOPS,)
+            if step in seen:
+                return None, "symlink loop at %s" % (step,)
+            seen.add(step)
+            try:
+                target = _target_of(step, root_abs)
+            except OSError as exc:
+                return None, exc.strerror or exc.__class__.__name__
+            inner = _parts(root_abs, target)
+            if inner is None:
+                return None, "%s resolves outside %s" % (
+                    step,
+                    os.path.basename(root_abs) or root_abs,
+                )
+            todo = inner + todo
+            current = root_abs
+            continue
+        if not os.path.lexists(step):
+            return None, "target %s has no counterpart inside the root" % (step,)
+        current = step
+    # Hand back the path as the host spells the root (realpath of the root only):
+    # /var -> /private/var is the host's business, and callers open this path. What
+    # must not happen is realpath() over the whole path, which would follow a link
+    # in the middle of it against the host.
+    rel = os.path.relpath(current, root_abs)
+    host_root = os.path.realpath(root_abs)
+    return (host_root if rel == "." else os.path.join(host_root, rel)), None
 
 
 def is_link(path: str) -> bool:

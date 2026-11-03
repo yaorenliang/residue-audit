@@ -130,9 +130,15 @@ class CiOnlyRunsSubcommandsThatExist(unittest.TestCase):
         for name in sorted(used):
             self.assertIn(name, subs, "CI runs 'residue %s', which the parser does not have" % name)
 
-    def test_the_demo_step_still_separates_failure_from_a_verdict(self):
+    def test_the_demo_step_reads_its_verdict_and_not_just_its_crashes(self):
+        # F-03: the step used to accept anything below 4. Python exits 1 on an
+        # uncaught exception, and 1 is this tool's code for *partial* - so a crash
+        # and a partial read produced the same number, and the step stayed green.
+        # The demo's verdict is fixed by the sections it builds, so the step has
+        # to name that number on both entries.
         text = workflow("ci.yml")
-        self.assertIn('test "$code" -lt 4', text)
+        self.assertEqual(text.count('test "$code" -eq 2'), 2)
+        self.assertNotIn("-lt 4", text)
 
     def test_the_demo_step_notices_a_dirty_tree(self):
         text = workflow("ci.yml")

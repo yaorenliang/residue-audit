@@ -405,12 +405,27 @@ def _claim(scratch: _Scratch) -> None:
         scratch.claims[path] = reason
 
 
+def _readable_path(scratch: _Scratch, path: str) -> Optional[str]:
+    """The path to open for one entry: inside the image, or None with the reason.
+
+    Claiming a path and reading it have to agree. A claim found through a symlinked
+    scan directory (or under any link in the middle of its path) is named
+    <root>/usr/libexec/worker, and asking the host to lstat that name lands in the
+    host's tree - the entry is real, the name is the image's.
+    """
+    real, why = inside.resolve(scratch.root, path)
+    if real is None:
+        _record(scratch, stat_io.StatError(path, "resolve", why or "unresolvable link"))
+    return real
+
+
 def _stamp(scratch: _Scratch) -> Tuple[ArtifactObs, ...]:
     """Read every claim's stamps once, and report the ones we could not read."""
     out: List[ArtifactObs] = []
     for path in sorted(scratch.claims):
-        stamp, err = stat_io.stat_of(path)
-        if stamp is None:
+        real = _readable_path(scratch, path)
+        stamp, err = (None, None) if real is None else stat_io.stat_of(real)
+        if stamp is None and err is not None:
             _record(scratch, err)
         out.append(ArtifactObs(path, sanitize(path, scratch.root), scratch.claims[path], stamp))
     return tuple(out)
@@ -434,7 +449,10 @@ def _directory_changed_after(
     artifact claims to exist. That is a change we can date, not a verdict about
     who made it, so it is reported as partial.
     """
-    info, err = stat_io.stat_of(directory)
+    real = _readable_path(scratch, directory)
+    if real is None:
+        return None
+    info, err = stat_io.stat_of(real)
     if info is None:
         _record(scratch, err)
         return None
@@ -451,9 +469,16 @@ def _directory_changed_after(
 
 
 def _dir_stamp(scratch: _Scratch, directory: str, arts: Sequence[ArtifactObs]) -> DirObs:
-    cap, cap_ctime, max_ino, neighbours = stat_io.dir_stats(
-        directory, {art.path for art in arts}, scratch.errors
-    )
+    real = _readable_path(scratch, directory)
+    ours = {art.path for art in arts}
+    if real is None:
+        cap, cap_ctime, max_ino, neighbours = 0, 0, 0, 0
+    else:
+        # The siblings are compared by the name the image gives them, and the
+        # artifacts sit at display paths that may run through a link: both
+        # spellings have to be excluded, or an artifact is its own neighbour.
+        ours |= {inside.resolve(scratch.root, art.path)[0] or art.path for art in arts}
+        cap, cap_ctime, max_ino, neighbours = stat_io.dir_stats(real, ours, scratch.errors)
     return DirObs(
         directory,
         sanitize(directory, scratch.root),
@@ -716,11 +741,13 @@ def _check_readable(obs: Observations) -> Check:
         gaps.append("%d path(s) unreadable" % len(obs.errors))
     if obs.truncated_files:
         gaps.append("%d file(s) cut off at the read window" % obs.truncated_files)
-    if obs.absolute_links:
-        gaps.append(
-            "%d absolute link(s) resolved inside the image root, not on the host"
-            % obs.absolute_links
-        )
+    # Absolute links used to be counted as gaps, on the theory that a reader should
+    # know the path was followed inside the image. But this check answers one
+    # question - was every scanned path read - and a link whose target sits inside
+    # the image is read. Counting it here said "the counts below describe a smaller
+    # tree" about a tree where nothing was skipped, and the tool exited 1
+    # (unmeasurable) on the most ordinary systemd shape there is. The count stays in
+    # facts: it is a fact about the tree, not a hole in the audit.
     if not gaps:
         return Check(
             "trace.readable",

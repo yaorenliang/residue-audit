@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 import tempfile
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +28,7 @@ from . import dwell as dwell_mod
 from . import report as report_mod
 from . import stat_io
 from . import trace as trace_mod
-from .model import FAIL, PASS, PARTIAL, Check, Report
+from .model import ERROR, EXIT, FAIL, PASS, PARTIAL, Check, Report
 
 
 def _borrowed_tree(root: str) -> None:
@@ -39,6 +40,11 @@ def _borrowed_tree(root: str) -> None:
     """
     _fixtures.make_dirs(root, trace_mod.DEFAULT_SCAN)
     _fixtures.write_neighbours(root, trace_mod.DEFAULT_SCAN)
+    # The comparison is strict (ctime_ms > cap_ms), so an artifact written in the
+    # same millisecond as its neighbours ties instead of winning. Without a beat
+    # between the two writes the ctime count drifts between runs, and the demo
+    # is quoted in the README: a sample that changes on every run is not a sample.
+    time.sleep(0.01)
     written = _fixtures.write_artifacts(root)
     _fixtures.borrow_sibling_mtimes(written)
 
@@ -193,9 +199,21 @@ def run(prose=None) -> Report:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    report = run(sys.stdout)
-    sys.stdout.write(report_mod.render(report, False))
+def main() -> int:
+    """The module entry point: one report, and every failure lands on 4.
+
+    This is the second entry point next to ``residue demo``, and it used to be the
+    only one without the boundary the CLI keeps. An uncaught exception left Python
+    exiting 1, which is this tool's code for *partial* - a verdict about the tree -
+    so a crash and a partial read were the same number to anything watching, CI
+    included.
+    """
+    try:
+        report = run(sys.stdout)
+        sys.stdout.write(report_mod.render(report, False))
+    except Exception as exc:  # noqa: BLE001 - the boundary itself is the point
+        sys.stderr.write("residue: error: %s: %s\n" % (exc.__class__.__name__, exc))
+        return EXIT[ERROR]
     return report.exit_code()
 
 

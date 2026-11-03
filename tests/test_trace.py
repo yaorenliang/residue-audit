@@ -379,5 +379,37 @@ class TheAnchorOutlivesTheScan(unittest.TestCase):
         self.assertTrue(all(art.path.startswith(inside) for art in obs.artifacts))
 
 
+class AnEnableLinkIsNotAGap(unittest.TestCase):
+    """A path the tool read inside the image is not a hole in readable.
+
+    A link is how systemd enables a unit, and an absolute target means "inside
+    the image". Claiming that link and then reporting it as a gap asked a reader
+    to distrust a path the run had just read. The link is still counted (facts
+    carry absolute_links); it just does not turn a clean run into a partial one.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = os.path.join(self.tmp, "img")
+        for directory in trace.DEFAULT_SCAN:
+            os.makedirs(os.path.join(self.root, directory), exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_link_read_inside_the_image_leaves_readable_clean(self):
+        unit = os.path.join(self.root, "etc/systemd/system/zz-bridge.service")
+        with open(unit, "w", encoding="utf-8") as handle:
+            handle.write("[Service]\nKillSignal=SIGCONT\n")
+        wants = os.path.join(self.root, "etc/systemd/system/multi-user.target.wants")
+        os.makedirs(wants, exist_ok=True)
+        os.symlink(
+            "/etc/systemd/system/zz-bridge.service", os.path.join(wants, "zz-bridge.service")
+        )
+        report = trace.run(self.root)
+        readable = [c for c in report.checks if c.name == "trace.readable"][0]
+        self.assertEqual(readable.status, PASS, readable.why)
+
+
 if __name__ == "__main__":
     unittest.main()

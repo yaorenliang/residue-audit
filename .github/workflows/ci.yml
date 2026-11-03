@@ -27,9 +27,11 @@ jobs:
         run: python -m unittest discover -s tests -t . -v
       - name: cross-check
         run: make cross
-      # The demo returns the verdict of the trees it builds, so its code is 0..3
-      # by design. Anything at or above 4 means the tool itself failed, and that
-      # is the only outcome worth failing the step over.
+      # The demo's verdict is fixed by the trees it builds: the borrowed-mtime
+      # section stands at fail, so the code is 2 and nothing else. This check used
+      # to accept anything below 4 - and 1 is Python's code for an uncaught
+      # exception, which is also this tool's code for *partial*. A crash read as a
+      # verdict and the step stayed green.
       - name: demo runs without touching the repository
         run: |
           set +e
@@ -38,7 +40,7 @@ jobs:
           code=$?
           after=$(git status --porcelain)
           set -e
-          test "$code" -lt 4
+          test "$code" -eq 2
           test "$before" = "$after"
       - name: install and run the console script
         run: |
@@ -49,6 +51,6 @@ jobs:
           residue demo > /dev/null
           code=$?
           set -e
-          # No error swallowing: 4 means the entry point is broken, and that is
-          # the one code a demo must never produce.
-          test "$code" -lt 4
+          # The console entry has to agree with the module entry: a verdict, not
+          # a crash. The demo's answer is 2; any other number is a broken entry.
+          test "$code" -eq 2

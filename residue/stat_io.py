@@ -199,11 +199,21 @@ def walk_files(root: str, rel_dir: str) -> Tuple[List[str], List[StatError]]:
     be resolved inside the image is reported instead of being dropped.
     """
     base = os.path.join(root, rel_dir)
-    names, err = listdir_sorted(base)
+    # List the directory the image names, not the one the host resolves: a scan
+    # directory that is itself a link (/usr/libexec -> /usr/lib, the usual merged-usr
+    # shape) used to enumerate the host tree, so the image's files vanished from the
+    # report and the host's files were reported as paths that resolve outside.
+    listing, why = inside.resolve(root, base)
+    if listing is None:
+        if not os.path.lexists(base):
+            # a partial tree does not have every default directory; that is not a gap
+            return [], []
+        return [], [StatError(base, "resolve", why or "unresolvable directory")]
+    names, err = listdir_sorted(listing)
     paths: List[str] = []
     errors: List[StatError] = [err] if err is not None else []
     for name in names:
-        full = os.path.join(base, name)
+        full = os.path.join(base, name)  # the name the caller asked about
         member, member_err = is_member(full, root)
         if member_err is not None:
             errors.append(member_err)

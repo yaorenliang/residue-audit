@@ -12,10 +12,13 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import unittest
+from unittest import mock
 
 from residue import cli, demo, report as report_mod
-from residue.model import EXIT, FAIL, PASS, PARTIAL
+from residue.model import ERROR, EXIT, FAIL, PASS, PARTIAL
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -111,6 +114,39 @@ class DemoJsonIsOneDocument(unittest.TestCase):
         stream = io.StringIO()
         demo.run(stream)
         self.assertIn("### borrowed.", stream.getvalue())
+
+
+class DemoSecondEntryPointFailsLoud(unittest.TestCase):
+    """F-03: the module entry point must never turn a crash into a verdict.
+
+    ``python -m residue.demo`` is the second way in, and it used to be the only
+    one without the boundary the CLI keeps. An uncaught exception left Python
+    exiting 1, which is this tool's code for *partial*: a statement about the
+    tree. CI read that as a verdict because its check was "below 4".
+    """
+
+    def test_a_crash_lands_on_the_error_code(self):
+        err = io.StringIO()
+        with mock.patch.object(demo, "run", side_effect=RuntimeError("boom")):
+            with mock.patch("sys.stderr", err):
+                code = demo.main()
+        self.assertEqual(code, EXIT[ERROR])
+        self.assertIn("residue: error: RuntimeError: boom", err.getvalue())
+
+    def test_the_process_exits_with_that_code(self):
+        script = (
+            "import residue.demo as d\n"
+            "def boom(*a, **k):\n"
+            "    raise RuntimeError('boom')\n"
+            "d.run = boom\n"
+            "raise SystemExit(d.main())\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script], cwd=REPO, capture_output=True, text=True
+        )
+        self.assertEqual(proc.returncode, EXIT[ERROR], proc.stderr)
+        self.assertIn("residue: error: RuntimeError: boom", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
 
 
 if __name__ == "__main__":

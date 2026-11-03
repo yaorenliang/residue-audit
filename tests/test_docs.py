@@ -16,6 +16,7 @@ import unittest
 
 from residue import cli
 from residue.model import EXIT
+from tests import readme_sample
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -168,10 +169,26 @@ class TranslationShape(unittest.TestCase):
 
 
 class DocsSample(unittest.TestCase):
-    def test_the_readme_sample_is_a_real_demo_section(self):
-        # The README quotes demo output verbatim. If demo changes shape, the quote
-        # has to change with it, so the quoted line must still be what demo prints.
-        text = read_doc("README.md")
-        self.assertIn("summary command=trace status=fail exit=2", text)
-        for key in ("trace.directory_ctime", "trace.readable", "weak_claims=", "directory_ctime"):
-            self.assertIn(key, text, "the quoted sample lost %s" % key)
+    """F-04: the README quotes the demo, so the quote has to be the demo output.
+
+    This used to grep for four substrings, which is not a check: the quote drifted
+    (two facts keys went missing) and stayed green. Now the block is compared line
+    by line against what tests/readme_sample.py prints.
+    """
+
+    def block(self, rel):
+        text = read_doc(rel)
+        start = text.index("```") + 4
+        end = text.index("```", start)
+        return [line.rstrip() for line in text[start:end].splitlines()][1:]
+
+    def test_the_readme_quote_is_the_demo_section(self):
+        want = [line.rstrip() for line in readme_sample.sample().splitlines()][1:]
+        got = self.block("README.md")
+        self.assertEqual(len(got), len(want), "the quoted sample changed length")
+        for index, (left, right) in enumerate(zip(want, got)):
+            self.assertEqual(left, right, "README sample line %d drifted" % (index + 2))
+
+    def test_the_translated_quote_is_the_same_output(self):
+        want = [line.rstrip() for line in readme_sample.sample().splitlines()][1:]
+        self.assertEqual(self.block("README.zh-CN.md"), want, "the zh README quotes a different sample")
