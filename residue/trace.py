@@ -567,85 +567,6 @@ def _check_corroborated(obs: Observations) -> Check:
     )
 
 
-def _check_ctime(obs: Observations) -> Check:
-    hits = obs.hits.ctime
-    if not hits:
-        return Check(
-            "trace.ctime",
-            PASS,
-            "no artifact has a ctime above every sibling in its directory",
-        )
-    return Check(
-        "trace.ctime",
-        FAIL,
-        "%d artifact(s) have a ctime newer than every sibling: mtime can be borrowed, "
-        "ctime cannot" % len(hits),
-        [Evidence(art.shown, "ctime_vs_cap", "newer") for art in hits],
-    )
-
-
-def _check_directory_ctime(obs: Observations) -> Check:
-    changed = obs.hits.directories
-    if not changed:
-        return Check(
-            "trace.directory_ctime",
-            PASS,
-            "no holding directory carries a ctime above the artifacts it holds",
-        )
-    return Check(
-        "trace.directory_ctime",
-        PARTIAL,
-        "%d holding director(y/ies) changed after the artifacts they hold: a directory "
-        "mtime/ctime is the usual hiding place, and it dates the assembly, not the intent"
-        % len(changed),
-        [
-            Evidence(
-                group.shown,
-                "dir_ctime_vs_oldest_mtime",
-                "%d > %d" % (group.changed[0], group.changed[1]),
-            )
-            for group in changed
-        ],
-    )
-
-
-def _check_fresh(obs: Observations) -> Check:
-    hits = obs.hits.fresh
-    if not hits:
-        return Check(
-            "trace.fresh",
-            PASS,
-            "no artifact carries an mtime within %ds of now" % obs.fresh_window_s,
-        )
-    return Check(
-        "trace.fresh",
-        FAIL,
-        "%d artifact(s) still carry an mtime within %ds of now"
-        % (len(hits), obs.fresh_window_s),
-        [
-            Evidence(art.shown, "fresh_window_s", str(obs.fresh_window_s))
-            for art in hits
-        ],
-    )
-
-
-def _check_order(obs: Observations) -> Check:
-    hits = obs.hits.order
-    if not hits:
-        return Check(
-            "trace.order",
-            PASS,
-            "no artifact has an inode above every sibling in its directory",
-        )
-    return Check(
-        "trace.order",
-        FAIL,
-        "%d artifact(s) have a higher inode than every sibling, so creation order is "
-        "recoverable" % len(hits),
-        [Evidence(art.shown, "inode_order", "newest") for art in hits],
-    )
-
-
 def _check_readable(obs: Observations) -> Check:
     if not obs.errors:
         return Check(
@@ -663,6 +584,87 @@ def _check_readable(obs: Observations) -> Check:
         ],
     )
 
+
+# Four checks fire on any hit at all and differ only in what the hit means. The
+# meaning is data: three are failures, and a directory stamp is a lead rather than a
+# failure because it dates the assembly of a tree, not the intent behind it. Writing
+# that ladder once - as a table keyed by check - keeps one of the four from quietly
+# growing its own answer.
+HIT_VERDICT = {
+    "ctime": FAIL,
+    "directory_ctime": PARTIAL,
+    "fresh": FAIL,
+    "order": FAIL,
+}
+
+
+def _spike_check(
+    name: str,
+    hits: Sequence[object],
+    why_clean: str,
+    why_hit: str,
+    evidence: List[Evidence],
+) -> Check:
+    """One hit, or none: the shape every hit-or-nothing check shares."""
+    if not hits:
+        return Check("trace." + name, PASS, why_clean)
+    return Check("trace." + name, HIT_VERDICT[name], why_hit, evidence)
+
+
+def _check_ctime(obs: Observations) -> Check:
+    hits = obs.hits.ctime
+    return _spike_check(
+        "ctime",
+        hits,
+        "no artifact has a ctime above every sibling in its directory",
+        "%d artifact(s) have a ctime newer than every sibling: mtime can be borrowed, "
+        "ctime cannot" % len(hits),
+        [Evidence(art.shown, "ctime_vs_cap", "newer") for art in hits],
+    )
+
+
+def _check_directory_ctime(obs: Observations) -> Check:
+    changed = obs.hits.directories
+    return _spike_check(
+        "directory_ctime",
+        changed,
+        "no holding directory carries a ctime above the artifacts it holds",
+        "%d holding director(y/ies) changed after the artifacts they hold: a directory "
+        "mtime/ctime is the usual hiding place, and it dates the assembly, not the intent"
+        % len(changed),
+        [
+            Evidence(
+                group.shown,
+                "dir_ctime_vs_oldest_mtime",
+                "%d > %d" % (group.changed[0], group.changed[1]),
+            )
+            for group in changed
+        ],
+    )
+
+
+def _check_fresh(obs: Observations) -> Check:
+    hits = obs.hits.fresh
+    window = obs.fresh_window_s
+    return _spike_check(
+        "fresh",
+        hits,
+        "no artifact carries an mtime within %ds of now" % window,
+        "%d artifact(s) still carry an mtime within %ds of now" % (len(hits), window),
+        [Evidence(art.shown, "fresh_window_s", str(window)) for art in hits],
+    )
+
+
+def _check_order(obs: Observations) -> Check:
+    hits = obs.hits.order
+    return _spike_check(
+        "order",
+        hits,
+        "no artifact has an inode above every sibling in its directory",
+        "%d artifact(s) have a higher inode than every sibling, so creation order is "
+        "recoverable" % len(hits),
+        [Evidence(art.shown, "inode_order", "newest") for art in hits],
+    )
 
 JUDGES = (
     _check_artifacts,

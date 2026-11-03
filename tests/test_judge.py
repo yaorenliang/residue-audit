@@ -8,6 +8,7 @@ first: a directory can only ever be partial, and two empty feature sets have no
 similarity to report.
 """
 
+import inspect
 import unittest
 from unittest import mock
 
@@ -158,6 +159,38 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual((facts["aligned"], facts["leaks"], facts["uncorroborated"]),
                          (1, 1, 1))
         self.assertEqual(facts["artifacts"], 3)
+
+    def test_the_ladder_is_a_table_and_not_four_branches(self):
+        self.assertEqual(
+            trace.HIT_VERDICT,
+            {
+                "ctime": model.FAIL,
+                "directory_ctime": model.PARTIAL,
+                "fresh": model.FAIL,
+                "order": model.FAIL,
+            },
+        )
+
+    def test_no_hit_check_states_its_own_verdict(self):
+        for name in trace.HIT_VERDICT:
+            source = inspect.getsource(getattr(trace, "_check_" + name))
+            self.assertNotIn("FAIL", source, name)
+            self.assertNotIn("PARTIAL", source, name)
+            self.assertIn("_spike_check", source, name)
+
+    def test_a_hit_takes_its_verdict_from_the_table(self):
+        obs = seen([
+            held(
+                "/r/etc",
+                [art("/r/etc/a", NOW - 1000, ino=5)],
+                cap=1,
+                cap_ctime=1,
+                max_ino=1,
+                changed=(5000, 1000),
+            )
+        ])
+        for name, verdict in trace.HIT_VERDICT.items():
+            self.assertEqual(status_of(obs, "trace." + name).status, verdict, name)
 
 
 if __name__ == "__main__":
