@@ -395,6 +395,63 @@ class DwellCaliberTest(unittest.TestCase):
         # dict, so a key added to the defined case silently went missing here
         self.assertEqual(sorted(report.facts), sorted(covered.facts))
 
+    # -- F-07 / F-08 / F-09: an unread row and an unmeasured rate are not answers --
+    def test_f07_a_row_without_a_kind_is_named_missing_not_folded(self):
+        ledger = self._ledger(
+            "silent.ndjson",
+            [
+                {"host": "h1", "ts": 100, "event": "deploy"},
+                {"host": "h2", "ts": 100},
+            ],
+        )
+        report = dwell.run(ledger)
+        self.assertEqual(report.facts["unknown_events"], [dwell.MISSING_KIND])
+        self.assertEqual(report.facts["hosts_unknown_kind"], ["h2"])
+        self.assertNotIn("h2", report.facts["hosts_not_deployed"],
+                         "a row we could not read is unknown, not a host that never deployed")
+        self.assertEqual(report.facts["not_deployed"], 0)
+        schema = [c for c in report.checks if c.name == "dwell.schema"][0]
+        self.assertEqual(schema.status, PARTIAL)
+
+    def test_f08_a_missing_hits_file_leaves_the_rate_unmeasured(self):
+        report = dwell.run(self._ledger("bare.ndjson", [
+            {"host": "h1", "ts": 100, "event": "deploy"},
+            {"host": "h1", "ts": 400, "event": "mine", "ok": True},
+        ]))
+        self.assertIsNone(report.facts["hit_rate"], "coverage was never measured")
+        self.assertIsNone(report.facts["hosts_without_hits"])
+        self.assertEqual(report.facts["verdict"], "unknown")
+
+    def test_f09_an_empty_hits_file_is_a_measured_zero(self):
+        hits = self._hits("no-hits.json", [])
+        report = dwell.run(
+            self._ledger("three.ndjson", [
+                {"host": "h1", "ts": 100, "event": "deploy"},
+                {"host": "h2", "ts": 120, "event": "deploy"},
+                {"host": "h3", "ts": 140, "event": "deploy"},
+            ]),
+            hits,
+        )
+        self.assertEqual(report.facts["hit_rate"], 0.0)
+        self.assertEqual(report.facts["hosts_without_hits"], report.facts["deployed"])
+        self.assertEqual(report.facts["verdict"], "partial-coverage")
+        coverage = [c for c in report.checks if c.name == "dwell.coverage"][0]
+        self.assertEqual(coverage.status, PARTIAL)
+        self.assertIn("0 of 3 host(s) hit", coverage.why)
+
+    def test_f09_a_hits_object_without_its_key_cannot_be_read(self):
+        hits = os.path.join(self.tmp, "shape.json")
+        with open(hits, "w", encoding="utf-8") as fh:
+            fh.write('{"rules": []}')
+        with self.assertRaises(ValueError) as caught:
+            dwell.run(self._ledger("one.ndjson", [{"host": "h1", "ts": 1, "event": "deploy"}]), hits)
+        self.assertIn("hits", str(caught.exception))
+
+    def test_f09_absent_and_empty_hits_are_different_answers(self):
+        empty = self._hits("measured-zero.json", [])
+        self.assertIsNone(dwell.load_hits(None))
+        self.assertEqual(dwell.load_hits(empty), [])
+
 
 if __name__ == "__main__":
     unittest.main()

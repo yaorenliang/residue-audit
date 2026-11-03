@@ -43,15 +43,24 @@ def load_ledger(path: str) -> List[dict]:
     return events
 
 
-def load_hits(path: Optional[str]) -> List[dict]:
+def load_hits(path: Optional[str]) -> Optional[List[dict]]:
+    """The hits file, or None when no hits file was named.
+
+    None and [] are different answers: no file means coverage was not measured, an
+    empty list means it was measured and nothing was hit. Returning [] for both is
+    how a report ends up printing 0.0% coverage for an audit that never looked.
+    """
     if not path:
-        return []
+        return None
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     if isinstance(data, dict):
-        data = data.get("hits", [])
+        if "hits" not in data:
+            raise ValueError(
+                "%s is an object without a hits key; coverage cannot be read from it" % path
+            )
+        data = data["hits"]
     return list(data)
-
 
 def _median(values: List[int]) -> float:
     """The median, which for an even count is the mean of the two middle values.
@@ -94,24 +103,53 @@ class _Tally:
     mined: Set[str]
     failed: Set[str]
     unknown: Dict[str, int]
+    unknown_hosts: List[str]
 
 
 @dataclass(frozen=True)
 class _Coverage:
-    """What the hits say about the hosts that reached deploy."""
+    """What the hits say about the hosts that reached deploy.
 
+    Two questions decide whether a rate exists at all, and they are different
+    questions: did anything reach deploy (otherwise there is no denominator), and
+    were hits supplied at all (otherwise there is no numerator). A rate of 0.0
+    answers neither - it says "measured, and nothing was hit" about a report that
+    measured nothing.
+    """
+
+    defined: bool
+    hits_provided: bool
     pre: int
     post: int
     per_rule: Dict[str, int]
     covered: int
     denominator: int
-    rate: float
+    rate: Optional[float]
     all_hosts_rate: Optional[float]
     unmatched: List[str]
 
     @property
-    def without_hits(self) -> int:
+    def without_hits(self) -> Optional[int]:
+        if self.rate is None:
+            return None
         return self.denominator - self.covered
+
+
+MISSING_KIND = "<missing>"
+
+
+def _kind(event: dict) -> Optional[str]:
+    """The kind of one event, or None when the line does not carry one.
+
+    Defaulting a missing kind to "scan" invented evidence twice over: the schema
+    check reported a clean vocabulary because every line had a kind, and a deploy
+    whose key was misspelled left the denominator without leaving a trace.
+    """
+    for key in ("event", "phase"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 def _tally(events: List[dict]) -> _Tally:
@@ -120,14 +158,18 @@ def _tally(events: List[dict]) -> _Tally:
     mined: Set[str] = set()
     failed: Set[str] = set()
     unknown: Dict[str, int] = {}
+    unknown_hosts: List[str] = []
 
     for event in events:
         host = str(event["host"])
         ts = int(event["ts"])
         last[host] = max(last.get(host, ts), ts)
-        kind = str(event.get("event") or event.get("phase") or "scan")
-        if kind not in KINDS:
-            unknown[kind] = unknown.get(kind, 0) + 1
+        kind = _kind(event)
+        if kind is None or kind not in KINDS:
+            name = MISSING_KIND if kind is None else kind
+            unknown[name] = unknown.get(name, 0) + 1
+            if host not in unknown_hosts:
+                unknown_hosts.append(host)
             continue
         if kind == "deploy":
             # a host that deployed twice counts once, from its earliest deploy:
@@ -138,15 +180,18 @@ def _tally(events: List[dict]) -> _Tally:
                 mined.add(host)
             else:
                 failed.add(host)
-    return _Tally(deploys, last, mined, failed, unknown)
+    return _Tally(deploys, last, mined, failed, unknown, sorted(unknown_hosts))
 
 
-def _coverage(hits: List[dict], deploys: Dict[str, int], hosts: List[str]) -> _Coverage:
+def _coverage(
+    hits: Optional[List[dict]], deploys: Dict[str, int], hosts: List[str]
+) -> _Coverage:
+    provided = hits is not None
     pre = post = 0
     per_rule: Dict[str, int] = {}
     hit_hosts: Set[str] = set()
     unmatched: List[str] = []
-    for hit in hits:
+    for hit in hits or []:
         host = str(hit["host"])
         rule = str(hit.get("rule", "unknown"))
         start = deploys.get(host)
@@ -167,10 +212,21 @@ def _coverage(hits: List[dict], deploys: Dict[str, int], hosts: List[str]) -> _C
         hit_hosts.add(host)
     covered = len(hit_hosts)
     denominator = len(deploys)
-    rate = 100.0 * covered / denominator if denominator else 0.0
-    all_hosts_rate = 100.0 * covered / len(hosts) if hosts and hits else None
+    defined = bool(denominator)
+    measurable = defined and provided
+    rate = 100.0 * covered / denominator if measurable else None
+    all_hosts_rate = 100.0 * covered / len(hosts) if measurable and hosts else None
     return _Coverage(
-        pre, post, per_rule, covered, denominator, rate, all_hosts_rate, unmatched
+        defined,
+        provided,
+        pre,
+        post,
+        per_rule,
+        covered,
+        denominator,
+        rate,
+        all_hosts_rate,
+        unmatched,
     )
 
 
@@ -194,11 +250,12 @@ def _hosts_check(tally: _Tally, hosts: List[str]) -> Check:
 
 def _schema_check(unknown: Dict[str, int]) -> Check:
     if unknown:
+        named = ", ".join("%s x%d" % (name, unknown[name]) for name in sorted(unknown))
         return Check(
             "dwell.schema",
             PARTIAL,
-            "%d event(s) have unrecognized kind; denominator may be wrong: %s"
-            % (sum(unknown.values()), ", ".join(sorted(unknown))),
+            "%d event(s) have unrecognized kind; the denominator may be wrong: %s"
+            % (sum(unknown.values()), named),
         )
     return Check(
         "dwell.schema",
@@ -224,31 +281,75 @@ def _span_check(spans: List[int]) -> Check:
     )
 
 
-def _coverage_check(defined: bool, hits: List[dict], cov: _Coverage) -> Check:
+def _coverage_check(cov: _Coverage) -> Check:
     evidence = [Evidence("<hits>", r, str(cov.per_rule[r])) for r in sorted(cov.per_rule)]
-    if not defined:
+    if not cov.defined:
         return Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
-    if not hits:
+    if not cov.hits_provided:
         return Check(
             "dwell.coverage",
             SKIP,
             "no detection hits supplied; coverage is unknown, not zero",
         )
-    if cov.rate > 50.0:
+    rate = cov.rate or 0.0
+    if rate > 50.0:
         return Check(
             "dwell.coverage",
             PASS,
             "%d of %d host(s) hit by at least one rule (%.1f%%), above half"
-            % (cov.covered, cov.denominator, cov.rate),
+            % (cov.covered, cov.denominator, rate),
             evidence,
         )
     return Check(
         "dwell.coverage",
         PARTIAL,
         "%d of %d host(s) hit (%.1f%%); exactly half or less is not coverage"
-        % (cov.covered, cov.denominator, cov.rate),
+        % (cov.covered, cov.denominator, rate),
         evidence,
     )
+
+
+def _verdict(cov: _Coverage) -> str:
+    if not cov.defined:
+        return "no-deployment"
+    if cov.rate is None:
+        return "unknown"
+    return "covered" if cov.rate > 50.0 else "partial-coverage"
+
+
+def _facts(
+    ledger_path: str, tally: _Tally, hosts: List[str], cov: _Coverage
+) -> dict:
+    # A host whose ledger row could not be read did not "never deploy": its
+    # deployment is unknown, and listing it here would turn an unread key into a
+    # measurement. It is named in hosts_unknown_kind instead.
+    not_deployed = [
+        host
+        for host in hosts
+        if host not in tally.deploys and host not in tally.unknown_hosts
+    ]
+    return {
+        "ledger": ledger_path,
+        "hosts": len(hosts),
+        "deployed": cov.denominator,
+        "not_deployed": len(not_deployed),
+        "hosts_not_deployed": not_deployed,
+        "mined": len(tally.mined),
+        "failed": len(tally.failed),
+        "hits_pre_deploy": cov.pre,
+        "hits_post_deploy": cov.post,
+        # two denominators, printed side by side: the hosts that reached deploy
+        # and every host the ledger mentions. Neither is the right one alone.
+        "hit_rate": round(cov.rate, 1) if cov.rate is not None else None,
+        "hit_rate_all_hosts": (
+            round(cov.all_hosts_rate, 1) if cov.all_hosts_rate is not None else None
+        ),
+        "hosts_without_hits": cov.without_hits,
+        "unknown_events": sorted(tally.unknown),
+        "hosts_unknown_kind": tally.unknown_hosts,
+        "hits_unmatched": sorted(cov.unmatched),
+        "verdict": _verdict(cov),
+    }
 
 
 def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
@@ -264,7 +365,6 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
 
     tally = _tally(events)
     hosts = sorted(tally.last)
-    hosts_not_deployed = [host for host in hosts if host not in tally.deploys]
     # a span runs from deploy to the last event seen for that host, whatever
     # order the lines arrived in. A host whose last event is its deploy has no
     # measured end, so it contributes no span rather than a fabricated zero
@@ -274,50 +374,11 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
         if tally.last[host] > start
     ]
     coverage = _coverage(hits, tally.deploys, hosts)
-    # A ledger that never reached deploy answers nothing, but it still describes
-    # what it saw. Returning early meant writing the same twelve facts a second
-    # time by hand, so the one place that could drift was the place nobody read.
-    defined = bool(tally.deploys)
-
     checks = [
         _data_check(events, hosts),
         _hosts_check(tally, hosts),
         _schema_check(tally.unknown),
         _span_check(spans),
-        _coverage_check(defined, hits, coverage),
+        _coverage_check(coverage),
     ]
-
-    if not defined:
-        verdict = "no-deployment"
-    elif not hits:
-        verdict = "unknown"
-    else:
-        verdict = "covered" if coverage.rate > 50.0 else "partial-coverage"
-
-    return Report(
-        "dwell",
-        checks,
-        {
-            "ledger": ledger_path,
-            "hosts": len(hosts),
-            "deployed": coverage.denominator,
-            "not_deployed": len(hosts) - coverage.denominator,
-            "hosts_not_deployed": hosts_not_deployed,
-            "mined": len(tally.mined),
-            "failed": len(tally.failed),
-            "hits_pre_deploy": coverage.pre,
-            "hits_post_deploy": coverage.post,
-            # two denominators, printed side by side: the hosts that reached deploy
-            # and every host the ledger mentions. Neither is the right one alone.
-            "hit_rate": round(coverage.rate, 1) if defined else None,
-            "hit_rate_all_hosts": (
-                round(coverage.all_hosts_rate, 1)
-                if coverage.all_hosts_rate is not None
-                else None
-            ),
-            "hosts_without_hits": coverage.without_hits if defined else None,
-            "unknown_events": sorted(tally.unknown),
-            "hits_unmatched": sorted(coverage.unmatched),
-            "verdict": verdict,
-        },
-    )
+    return Report("dwell", checks, _facts(ledger_path, tally, hosts, coverage))
