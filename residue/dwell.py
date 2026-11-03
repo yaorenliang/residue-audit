@@ -210,33 +210,16 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
     all_hosts_rate = 100.0 * covered / len(hosts) if hosts and hits else None
     none = denominator - covered
 
-    if not deploys:
+    # A ledger that never reached deploy answers nothing, but it still describes
+    # what it saw. Returning early meant writing the same twelve facts a second
+    # time by hand, so the one place that could drift was the place nobody read.
+    defined = bool(deploys)
+
+    if not defined:
         checks.append(
             Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
         )
-        return Report(
-            "dwell",
-            checks,
-            {
-                "ledger": ledger_path,
-                "hosts": len(hosts),
-                "deployed": 0,
-                "not_deployed": len(hosts),
-                "hosts_not_deployed": hosts_not_deployed,
-                "mined": len(mined),
-                "failed": len(failed),
-                "hits_pre_deploy": pre,
-                "hits_post_deploy": post,
-                "hit_rate": None,
-                "hit_rate_all_hosts": all_hosts_rate,
-                "hosts_without_hits": None,
-                "unknown_events": unknown_events,
-                "hits_unmatched": sorted(unmatched),
-                "verdict": "no-deployment",
-            },
-        )
-
-    if not hits:
+    elif not hits:
         checks.append(
             Check(
                 "dwell.coverage",
@@ -265,9 +248,12 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
             )
         )
 
-    verdict = "covered" if rate > 50.0 else "partial-coverage"
-    if not hits:
+    if not defined:
+        verdict = "no-deployment"
+    elif not hits:
         verdict = "unknown"
+    else:
+        verdict = "covered" if rate > 50.0 else "partial-coverage"
 
     return Report(
         "dwell",
@@ -282,11 +268,13 @@ def run(ledger_path: str, hits_path: Optional[str] = None) -> Report:
             "failed": len(failed),
             "hits_pre_deploy": pre,
             "hits_post_deploy": post,
-            "hit_rate": round(rate, 1),
+            # two denominators, printed side by side: the hosts that reached deploy
+            # and every host the ledger mentions. Neither is the right one alone.
+            "hit_rate": round(rate, 1) if defined else None,
             "hit_rate_all_hosts": (
                 round(all_hosts_rate, 1) if all_hosts_rate is not None else None
             ),
-            "hosts_without_hits": none,
+            "hosts_without_hits": none if defined else None,
             "unknown_events": unknown_events,
             "hits_unmatched": sorted(unmatched),
             "verdict": verdict,

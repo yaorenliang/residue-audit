@@ -371,5 +371,30 @@ class DwellCaliberTest(unittest.TestCase):
         self.assertNotIn("every host in the ledger", dwell.__doc__)
 
 
+    def test_a_ledger_that_never_deployed_still_reports_every_fact(self):
+        ledger = self._ledger(
+            "nodeploy.ndjson",
+            [
+                {"ts": 1000, "host": "h1", "event": "scan"},
+                {"ts": 1010, "host": "h1", "event": "mine", "ok": True},
+                {"ts": 1020, "host": "h2", "event": "scan"},
+            ],
+        )
+        hits = self._hits("nodeploy_hits.json", [{"ts": 1005, "host": "h1", "rule": "r"}])
+        report = dwell.run(ledger, hits)
+        covered = dwell.run(self._spans("covered.ndjson", [10]), hits)
+        coverage = _named(report, "dwell.coverage")
+        self.assertEqual(coverage.status, SKIP)
+        self.assertIn("no host reached deploy", coverage.why)
+        self.assertEqual(report.facts["verdict"], "no-deployment")
+        self.assertIsNone(report.facts["hit_rate"])
+        self.assertIsNone(report.facts["hosts_without_hits"])
+        self.assertEqual(report.facts["hosts_not_deployed"], ["h1", "h2"])
+        self.assertEqual(report.facts["hits_unmatched"], ["h1"])
+        # one exit for every ledger: the undefined case used to build its own fact
+        # dict, so a key added to the defined case silently went missing here
+        self.assertEqual(sorted(report.facts), sorted(covered.facts))
+
+
 if __name__ == "__main__":
     unittest.main()
