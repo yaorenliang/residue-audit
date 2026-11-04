@@ -12,7 +12,7 @@ import inspect
 import unittest
 from unittest import mock
 
-from residue import model, stat_io, trace
+from residue import model, stat_io, trace, trace_checks, trace_dirs, trace_obs, trace_parse
 
 ROOT = "/r"
 NOW = 10_000_000
@@ -23,15 +23,15 @@ def stamp(mtime_ms, ctime_ms=None, ino=1):
 
 
 def art(path, mtime_ms=1000, ctime_ms=None, ino=1, marker="unit:marker"):
-    return trace.ArtifactObs(
-        path, trace.sanitize(path, ROOT), marker, stamp(mtime_ms, ctime_ms, ino)
+    return trace_obs.ArtifactObs(
+        path, trace_parse.sanitize(path, ROOT), marker, stamp(mtime_ms, ctime_ms, ino)
     )
 
 
 def held(directory, arts, cap=1000, cap_ctime=1000, max_ino=99, neighbours=1, changed=None):
-    return trace.DirObs(
+    return trace_obs.DirObs(
         directory,
-        trace.sanitize(directory, ROOT),
+        trace_parse.sanitize(directory, ROOT),
         cap,
         cap_ctime,
         max_ino,
@@ -43,14 +43,14 @@ def held(directory, arts, cap=1000, cap_ctime=1000, max_ino=99, neighbours=1, ch
 
 def seen(dirs, errors=(), weak=(), truncated=0, window=120):
     dirs = tuple(dirs)
-    return trace.Observations(
+    return trace_obs.Observations(
         ROOT,
         NOW,
         window,
         ("etc",),
         tuple(one for group in dirs for one in group.artifacts),
         dirs,
-        trace._hits(dirs, NOW, window),
+        trace_dirs._hits(dirs, NOW, window),
         {path: "not audited" for path in weak},
         tuple(errors),
         truncated,
@@ -146,9 +146,9 @@ class JudgeTest(unittest.TestCase):
 
     def test_the_judges_never_touch_the_filesystem(self):
         obs = seen([held("/nowhere/at/all", [art("/nowhere/at/all/kworker", 2000)])])
-        with mock.patch.object(trace.stat_io, "stat_of", side_effect=AssertionError("read")):
+        with mock.patch.object(stat_io, "stat_of", side_effect=AssertionError("read")):
             checks = trace.checks(obs)
-        self.assertEqual(len(checks), len(trace.JUDGES))
+        self.assertEqual(len(checks), len(trace_checks.JUDGES))
 
     def test_facts_are_derived_from_the_hits(self):
         obs = seen([
@@ -162,7 +162,7 @@ class JudgeTest(unittest.TestCase):
 
     def test_the_ladder_is_a_table_and_not_four_branches(self):
         self.assertEqual(
-            trace.HIT_VERDICT,
+            trace_checks.HIT_VERDICT,
             {
                 "ctime": model.FAIL,
                 "directory_ctime": model.PARTIAL,
@@ -172,8 +172,8 @@ class JudgeTest(unittest.TestCase):
         )
 
     def test_no_hit_check_states_its_own_verdict(self):
-        for name in trace.HIT_VERDICT:
-            source = inspect.getsource(getattr(trace, "_check_" + name))
+        for name in trace_checks.HIT_VERDICT:
+            source = inspect.getsource(getattr(trace_checks, "_check_" + name))
             self.assertNotIn("FAIL", source, name)
             self.assertNotIn("PARTIAL", source, name)
             self.assertIn("_spike_check", source, name)
@@ -189,7 +189,7 @@ class JudgeTest(unittest.TestCase):
                 changed=(5000, 1000),
             )
         ])
-        for name, verdict in trace.HIT_VERDICT.items():
+        for name, verdict in trace_checks.HIT_VERDICT.items():
             self.assertEqual(status_of(obs, "trace." + name).status, verdict, name)
 
     def test_alignment_counts_only_the_artifacts_it_compared(self):

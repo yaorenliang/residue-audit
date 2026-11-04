@@ -2,16 +2,21 @@
   "modules": {
     "__init__.py": 100.0,
     "__main__.py": 100.0,
-    "_fixtures.py": 94.8,
-    "batch.py": 89.5,
-    "cli.py": 91.0,
-    "demo.py": 90.4,
+    "_fixtures.py": 94.1,
+    "batch.py": 90.9,
+    "cli.py": 92.9,
+    "demo.py": 91.2,
     "dwell.py": 96.5,
-    "inside.py": 85.1,
-    "model.py": 93.2,
-    "report.py": 93.3,
-    "stat_io.py": 80.3,
-    "trace.py": 90.8
+    "inside.py": 89.2,
+    "model.py": 94.3,
+    "report.py": 92.6,
+    "stat_io.py": 91.3,
+    "trace.py": 96.6,
+    "trace_checks.py": 95.6,
+    "trace_claims.py": 89.9,
+    "trace_dirs.py": 92.9,
+    "trace_obs.py": 100.0,
+    "trace_parse.py": 90.3
   },
-  "total": 90.6
+  "total": 93.0
 }

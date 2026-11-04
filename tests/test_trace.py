@@ -5,7 +5,7 @@ import tempfile
 import time
 import unittest
 
-from residue import stat_io, trace
+from residue import stat_io, trace, trace_parse
 from residue.model import FAIL, PARTIAL, PASS, SKIP
 from tests import fixtures as fx
 
@@ -447,7 +447,7 @@ class ReportedWordsTest(unittest.TestCase):
         # whitespace first claimed "/usr/local/bin/my" and left the real binary
         # unclaimed with no error to say so.
         line = 'ExecStart="/usr/local/bin/my tool" --flag'
-        self.assertEqual(trace.exec_start_targets(line), ["/usr/local/bin/my tool"])
+        self.assertEqual(trace_parse.exec_start_targets(line), ["/usr/local/bin/my tool"])
 
     def test_two_spellings_of_one_directory_are_one_artifact(self):
         # merged-usr images carry /usr/libexec as a link to /usr/lib, so a scan

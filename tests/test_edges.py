@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from residue import _fixtures, batch, cli, demo, dwell, inside, model, report, stat_io, trace
+from residue import _fixtures, batch, cli, demo, dwell, inside, model, report, stat_io, trace, trace_checks, trace_claims, trace_dirs, trace_obs, trace_parse
 
 
 def touch(path: str, text: str = "x\n") -> str:
@@ -27,12 +27,12 @@ def touch(path: str, text: str = "x\n") -> str:
     return path
 
 
-def hits_none() -> "trace.Hits":
-    return trace.Hits((), (), (), (), (), (), ())
+def hits_none() -> "trace_obs.Hits":
+    return trace_obs.Hits((), (), (), (), (), (), ())
 
 
-def art(path: str, stamp=None, marker: str = "m") -> "trace.ArtifactObs":
-    return trace.ArtifactObs(path, path, marker, stamp)
+def art(path: str, stamp=None, marker: str = "m") -> "trace_obs.ArtifactObs":
+    return trace_obs.ArtifactObs(path, path, marker, stamp)
 
 
 class SanitizeTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class SanitizeTest(unittest.TestCase):
             root = os.path.join(tmp, "img")
             path = touch(os.path.join(root, "etc", "x"))
             self.assertEqual(
-                trace.sanitize(path, root + os.sep + "."), "<root>/etc/x"
+                trace_parse.sanitize(path, root + os.sep + "."), "<root>/etc/x"
             )
 
     def test_a_path_outside_the_root_is_shown_in_full(self):
@@ -51,18 +51,18 @@ class SanitizeTest(unittest.TestCase):
             root = os.path.join(tmp, "img")
             os.makedirs(root)
             other = os.path.join(tmp, "other")
-            self.assertEqual(trace.sanitize(other, root), other)
+            self.assertEqual(trace_parse.sanitize(other, root), other)
 
 
 class MarkerReadingTest(unittest.TestCase):
     """Two readers that answer a question about text, not about the disk."""
 
     def test_text_without_a_marker_is_false_not_none(self):
-        self.assertIs(trace.carries_marker("nothing here\n", ("marker",)), False)
+        self.assertIs(trace_parse.carries_marker("nothing here\n", ("marker",)), False)
 
     def test_a_quoted_exec_start_still_names_its_path(self):
         self.assertEqual(
-            trace.exec_start_targets("ExecStart='/bin/sh' -c 'echo hi'"), ["/bin/sh"]
+            trace_parse.exec_start_targets("ExecStart='/bin/sh' -c 'echo hi'"), ["/bin/sh"]
         )
 
 
@@ -70,12 +70,12 @@ class ListingIsCachedTest(unittest.TestCase):
     """One pass lists a set of directories once: a tree can change under it."""
 
     def test_the_second_visit_reuses_the_first_listing(self):
-        scratch = trace._Scratch(root="/r", scan=("etc",), markers=(), broad=False)
+        scratch = trace_obs._Scratch(root="/r", scan=("etc",), markers=(), broad=False)
         with mock.patch.object(
             stat_io, "walk_files", side_effect=[(["/r/etc/a"], []), (["/r/etc/b"], [])]
         ) as walk:
-            first = trace._list(scratch, ("etc",))
-            second = trace._list(scratch, ("etc",))
+            first = trace_claims._list(scratch, ("etc",))
+            second = trace_claims._list(scratch, ("etc",))
         self.assertEqual(first, ["/r/etc/a"])
         self.assertEqual(second, ["/r/etc/a"])
         self.assertEqual(walk.call_count, 1)
@@ -91,9 +91,9 @@ class StampReadingTest(unittest.TestCase):
             link = os.path.join(root, "etc", "systemd", "system", "zz.service")
             os.makedirs(os.path.dirname(link))
             os.symlink("/etc/hostname", link)
-            scratch = trace._Scratch(root=root, scan=(), markers=(), broad=False)
+            scratch = trace_obs._Scratch(root=root, scan=(), markers=(), broad=False)
             scratch.claims[link] = "unit:marker"
-            arts = trace._stamp(scratch)
+            arts = trace_claims._stamp(scratch)
         self.assertEqual(len(arts), 1)
         self.assertIsNotNone(arts[0].stamp)
         self.assertTrue(
@@ -110,9 +110,9 @@ class StampReadingTest(unittest.TestCase):
             path = os.path.join(root, "etc", "systemd", "system", "x.service")
             os.makedirs(os.path.dirname(os.path.dirname(path)))
             os.symlink(outside, os.path.dirname(path))
-            scratch = trace._Scratch(root=root, scan=(), markers=(), broad=False)
+            scratch = trace_obs._Scratch(root=root, scan=(), markers=(), broad=False)
             scratch.claims[path] = "unit:marker"
-            arts = trace._stamp(scratch)
+            arts = trace_claims._stamp(scratch)
         self.assertEqual(len(arts), 1)
         self.assertIsNone(arts[0].stamp)
         self.assertEqual([err.path for err in scratch.errors], [path])
@@ -122,19 +122,19 @@ class StampReadingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = os.path.join(tmp, "img")
             path = touch(os.path.join(root, "f"))
-            scratch = trace._Scratch(root=root, scan=(), markers=(), broad=False)
+            scratch = trace_obs._Scratch(root=root, scan=(), markers=(), broad=False)
             scratch.claims[path] = "unit:marker"
             err = stat_io.StatError(path, "stat", "boom")
             with mock.patch.object(stat_io, "stat_of", return_value=(None, err)):
-                trace._stamp(scratch)
+                trace_claims._stamp(scratch)
         self.assertEqual(list(scratch.errors), [err])
 
 
 class DirectoryChangedTest(unittest.TestCase):
     """Every early exit of the directory-changed comparison."""
 
-    def _scratch(self, root: str) -> "trace._Scratch":
-        return trace._Scratch(root=root, scan=(), markers=(), broad=False)
+    def _scratch(self, root: str) -> "trace_obs._Scratch":
+        return trace_obs._Scratch(root=root, scan=(), markers=(), broad=False)
 
     def test_a_directory_that_cannot_be_resolved_is_not_dated(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,7 +142,7 @@ class DirectoryChangedTest(unittest.TestCase):
             os.makedirs(root)
             gone = os.path.join(root, "gone")
             self.assertIsNone(
-                trace._directory_changed_after(self._scratch(root), gone, ())
+                trace_dirs._directory_changed_after(self._scratch(root), gone, ())
             )
 
     def test_a_directory_that_cannot_be_stamped_is_reported(self):
@@ -153,7 +153,7 @@ class DirectoryChangedTest(unittest.TestCase):
             err = stat_io.StatError(root, "stat", "boom")
             with mock.patch.object(stat_io, "stat_of", return_value=(None, err)):
                 self.assertIsNone(
-                    trace._directory_changed_after(scratch, root, ())
+                    trace_dirs._directory_changed_after(scratch, root, ())
                 )
         self.assertEqual(list(scratch.errors), [err])
 
@@ -162,7 +162,7 @@ class DirectoryChangedTest(unittest.TestCase):
             root = os.path.join(tmp, "img")
             os.makedirs(root)
             self.assertIsNone(
-                trace._directory_changed_after(
+                trace_dirs._directory_changed_after(
                     self._scratch(root), root, (art(os.path.join(root, "f")),)
                 )
             )
@@ -172,7 +172,7 @@ class DirectoryChangedTest(unittest.TestCase):
             root = os.path.join(tmp, "img")
             os.makedirs(root)
             self.assertIsNone(
-                trace._directory_changed_after(self._scratch(root), root, ())
+                trace_dirs._directory_changed_after(self._scratch(root), root, ())
             )
 
     def test_an_unreadable_directory_contributes_no_neighbours(self):
@@ -180,7 +180,7 @@ class DirectoryChangedTest(unittest.TestCase):
             root = os.path.join(tmp, "img")
             os.makedirs(root)
             gone = os.path.join(root, "gone")
-            obs = trace._dir_stamp(self._scratch(root), gone, ())
+            obs = trace_dirs._dir_stamp(self._scratch(root), gone, ())
         self.assertEqual(
             (obs.cap_mtime_ms, obs.cap_ctime_ms, obs.max_ino, obs.neighbours),
             (0, 0, 0, 0),
@@ -193,16 +193,16 @@ class FreshnessTest(unittest.TestCase):
     def test_an_artifact_inside_the_window_is_fresh(self):
         stamp = stat_io.Stat(1_000_000, 1_000_000, 1)
         self.assertEqual(
-            trace._fresh((art("/r/a", stamp),), 1_000_500, 120), (art("/r/a", stamp),)
+            trace_dirs._fresh((art("/r/a", stamp),), 1_000_500, 120), (art("/r/a", stamp),)
         )
 
     def test_an_artifact_without_a_stamp_proves_nothing_about_its_neighbours(self):
-        group = trace.DirObs("/r", "/r", 0, 0, 0, 2, (), None)
-        self.assertIs(trace._newer_than_siblings(art("/r/a"), group), False)
+        group = trace_obs.DirObs("/r", "/r", 0, 0, 0, 2, (), None)
+        self.assertIs(trace_dirs._newer_than_siblings(art("/r/a"), group), False)
 
     def test_an_unstamped_artifact_is_not_sorted_as_aligned(self):
-        group = trace.DirObs("/r", "/r", 0, 0, 0, 2, (art("/r/a"),), None)
-        found = trace._hits((group,), 0, 120)
+        group = trace_obs.DirObs("/r", "/r", 0, 0, 0, 2, (art("/r/a"),), None)
+        found = trace_dirs._hits((group,), 0, 120)
         self.assertEqual(found.aligned, ())
         self.assertEqual(found.uncorroborated, ())
 
@@ -211,7 +211,7 @@ class TruncatedArtifactTest(unittest.TestCase):
     """A file cut off at the read window makes the set itself incomplete."""
 
     def test_a_long_unit_is_reported_as_cut_off(self):
-        obs = trace.Observations(
+        obs = trace_obs.Observations(
             root="/r",
             now_ms=0,
             fresh_window_s=120,
@@ -221,7 +221,7 @@ class TruncatedArtifactTest(unittest.TestCase):
             hits=hits_none(),
             truncated_files=2,
         )
-        check = trace._check_artifacts(obs)
+        check = trace_checks._check_artifacts(obs)
         self.assertEqual(check.status, model.PARTIAL)
         self.assertIn("cut off at the read window", check.why)
         self.assertIn("2 file(s)", check.why)
@@ -683,7 +683,7 @@ class ALinkWeCannotReadIsNotCalledAbsolute(unittest.TestCase):
             os.symlink("/etc/hostname", link)
             os.chmod(holder, 0)
             try:
-                self.assertFalse(trace._absolute_link(link))
+                self.assertFalse(trace_claims._absolute_link(link))
             finally:
                 os.chmod(holder, 0o755)
 
