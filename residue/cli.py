@@ -239,11 +239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         report = _dispatch(args)
         # the renderer owns the conversion of facts into json shapes; doing it
         # here as well left report.as_json reachable and still broken.
-        sys.stdout.write(report_mod.render(report, bool(args.json)))
-        if not report_mod.flush_stdout():
-            sys.stderr.write("residue: error: stdout closed before the report was written\n")
-            return EXIT[ERROR]
-        return report.exit_code()
+        return report_mod.emit(report, bool(args.json))
     except ToolError as exc:
         report_mod.flush_stdout()
         sys.stderr.write("residue: error: %s\n" % (exc,))

@@ -7,7 +7,7 @@ import os
 import sys
 from typing import Any, List
 
-from .model import Report
+from .model import ERROR, EXIT, Report
 
 
 def flush_stdout() -> bool:
@@ -99,3 +99,18 @@ def as_text(report: Report) -> str:
 
 def render(report: Report, want_json: bool) -> str:
     return as_json(report) if want_json else as_text(report)
+
+
+_UNDELIVERED = "residue: error: stdout closed before the report was written\n"
+
+
+def emit(report: Report, want_json: bool) -> int:
+    # Both entry points end here: the document goes out, the buffer is flushed
+    # inside the boundary, and a reader who left before the last byte becomes
+    # the tool's own failure (4) instead of a verdict about the tree. One write
+    # carries the diagnostic: it is the message when nothing was delivered and
+    # an empty string when everything was, so the boundary reads as one path.
+    sys.stdout.write(render(report, want_json))
+    undelivered = not flush_stdout()
+    sys.stderr.write(_UNDELIVERED if undelivered else "")
+    return EXIT[ERROR] if undelivered else report.exit_code()
