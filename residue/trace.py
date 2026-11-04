@@ -25,7 +25,6 @@ import time
 from typing import Dict, List, Optional, Sequence
 
 from .model import Check, Report
-from .trace_parse import EXEC_PREFIXES  # documented above; consumed by exec_start_targets
 from .trace_obs import Observations, _Scratch
 from .trace_claims import DEFAULT_SCAN, _claim, _stamp, scan_entry
 from .trace_dirs import _dir_observations, _hits
