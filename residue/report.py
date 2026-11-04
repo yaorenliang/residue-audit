@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, List
 
 from .model import Report
 
@@ -29,6 +29,14 @@ def flush_stdout() -> bool:
         return False
 
 
+def _ordered(items: List[Any]) -> List[Any]:
+    """Sorted; by repr when the values cannot be compared, so a diff stays stable."""
+    try:
+        return sorted(items)
+    except TypeError:
+        return sorted(items, key=repr)
+
+
 def _jsonable(value: Any) -> Any:
     """Turn a fact into the shapes json can carry.
 
@@ -50,11 +58,7 @@ def _jsonable(value: Any) -> Any:
             for name, item in value.items()
         )
     if isinstance(value, (set, frozenset)):
-        items = [_jsonable(item) for item in value]
-        try:
-            return sorted(items)
-        except TypeError:
-            return sorted(items, key=repr)
+        return _ordered([_jsonable(item) for item in value])
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     if value is None or isinstance(value, (str, int, float)):
