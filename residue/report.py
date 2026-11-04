@@ -29,7 +29,7 @@ def flush_stdout() -> bool:
         return False
 
 
-def _jsonable(value: Any, key: str = "") -> Any:
+def _jsonable(value: Any) -> Any:
     """Turn a fact into the shapes json can carry.
 
     Facts are measurements, and a measurement can be a set: "these two runs
@@ -46,18 +46,18 @@ def _jsonable(value: Any, key: str = "") -> Any:
     """
     if isinstance(value, dict):
         return dict(
-            (str(name), _jsonable(item, "%s.%s" % (key, name) if key else str(name)))
+            (str(name), _jsonable(item))
             for name, item in value.items()
         )
     if isinstance(value, (set, frozenset)):
-        items = [_jsonable(item, key) for item in value]
+        items = [_jsonable(item) for item in value]
         try:
             return sorted(items)
         except TypeError:
             return sorted(items, key=repr)
     if isinstance(value, (list, tuple)):
-        return [_jsonable(item, key) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+        return [_jsonable(item) for item in value]
+    if value is None or isinstance(value, (str, int, float)):
         return value
     if isinstance(value, os.PathLike):
         return os.fspath(value)
@@ -81,7 +81,7 @@ def as_text(report: Report) -> str:
     if report.facts:
         lines.append("")
         for key in sorted(report.facts):
-            value = _jsonable(report.facts[key], key)
+            value = _jsonable(report.facts[key])
             if isinstance(value, (list, dict)):
                 value = json.dumps(value, sort_keys=True)
             lines.append("%s=%s" % (key, value))
