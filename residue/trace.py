@@ -617,14 +617,13 @@ def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
     for group in dirs:
         if group.changed is not None: changed.append(group)
         if group.neighbours == 0:
+            # nothing to be "no newer than": a pass here would be an
+            # assumption wearing a verdict's clothes
             uncorroborated.extend(group.artifacts)
+            continue
         for art in group.artifacts:
             stamp = art.stamp
             if stamp is None:
-                continue
-            if group.neighbours == 0:
-                # nothing to be "no newer than": a pass here would be an
-                # assumption wearing a verdict's clothes
                 continue
             if _newer_than_siblings(art, group):
                 leaked.append(art)
