@@ -80,8 +80,6 @@ class Report:
         "nothing matched; the audit did not happen". The verdict therefore wins first,
         and skip survives only when nothing was measured at all.
         """
-        if not self.checks:
-            return SKIP
         for verdict in (FAIL, PARTIAL):
             if any(c.status == verdict for c in self.checks):
                 return verdict
