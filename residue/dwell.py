@@ -286,43 +286,39 @@ def _span_check(spans: List[int]) -> Check:
     )
 
 
-def _coverage_check(cov: _Coverage) -> Check:
-    evidence = [Evidence("<hits>", r, str(cov.per_rule[r])) for r in sorted(cov.per_rule)]
+def _coverage_tag(cov: _Coverage) -> str:
+    """One four-state answer, named once: the check and the verdict both read it.
+
+    The same tree used to be written twice, once as a Check and once as a verdict
+    string, and two copies of one judgement drift apart the first time either is
+    edited. The tag is the judgement; severity and prose are rendered from it.
+    """
     if not cov.defined:
-        return Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
+        return "no-deployment"
     if not cov.hits_provided:
         # nothing to compare the ledger against: the run measured what it could
         # and leaves coverage open. That is a partial answer - not a pass, and not
         # a void that lets one inapplicable check outrank four that passed.
-        return Check(
-            "dwell.coverage",
-            PARTIAL,
-            "no detection hits supplied; coverage is unknown, not zero",
-        )
-    rate = cov.rate or 0.0
-    if rate > 50.0:
-        return Check(
-            "dwell.coverage",
-            PASS,
-            "%d of %d host(s) hit by at least one rule (%.1f%%), above half"
-            % (cov.covered, cov.denominator, rate),
-            evidence,
-        )
-    return Check(
-        "dwell.coverage",
-        PARTIAL,
-        "%d of %d host(s) hit (%.1f%%); exactly half or less is not coverage"
-        % (cov.covered, cov.denominator, rate),
-        evidence,
-    )
-
-
-def _verdict(cov: _Coverage) -> str:
-    if not cov.defined:
-        return "no-deployment"
-    if cov.rate is None:
         return "unknown"
-    return "covered" if cov.rate > 50.0 else "partial-coverage"
+    return "covered" if (cov.rate or 0.0) > 50.0 else "partial-coverage"
+
+
+def _coverage_check(cov: _Coverage) -> Check:
+    tag = _coverage_tag(cov)
+    if tag == "no-deployment":
+        return Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
+    if tag == "unknown":
+        return Check("dwell.coverage", PARTIAL, "no detection hits supplied; coverage is unknown, not zero")
+    # only the two measured tags name numbers, and only they carry the evidence
+    evidence = [Evidence("<hits>", r, str(cov.per_rule[r])) for r in sorted(cov.per_rule)]
+    rate = cov.rate or 0.0
+    status = PASS if tag == "covered" else PARTIAL
+    text = (
+        "%d of %d host(s) hit by at least one rule (%.1f%%), above half"
+        if status == PASS
+        else "%d of %d host(s) hit (%.1f%%); exactly half or less is not coverage"
+    )
+    return Check("dwell.coverage", status, text % (cov.covered, cov.denominator, rate), evidence)
 
 
 def _facts(
@@ -356,7 +352,7 @@ def _facts(
         "unknown_events": sorted(tally.unknown),
         "hosts_unknown_kind": tally.unknown_hosts,
         "hits_unmatched": sorted(cov.unmatched),
-        "verdict": _verdict(cov),
+        "verdict": _coverage_tag(cov),
     }
 
 
