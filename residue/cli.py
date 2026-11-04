@@ -89,35 +89,15 @@ def _threshold(text: str) -> float:
     return value
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = Parser(
-        prog="residue",
-        description="Recompute how deeply an implant hid, from artifacts or ledgers.",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        default=False,
-        help="emit machine-readable JSON (accepted before or after the subcommand)",
-    )
-    parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
+_JSON_HELP = "emit machine-readable JSON (accepted before or after the subcommand)"
 
-    common = Parser(add_help=False)
-    # The help text promises both positions, so both parsers carry the flag. The
-    # subparser default is SUPPRESS: it then never touches a value the parent
-    # already set, and a bare "trace --json" still ends up true.
-    common.add_argument(
-        "--json",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="emit machine-readable JSON (accepted before or after the subcommand)",
+
+def _add_trace_arguments(subs: Any, common: argparse.ArgumentParser) -> None:
+    cmd = subs.add_parser(
+        "trace", parents=[common], help="audit on-disk artifacts in a root tree"
     )
-
-    subs = parser.add_subparsers(dest="command")
-
-    trace_cmd = subs.add_parser("trace", parents=[common], help="audit on-disk artifacts in a root tree")
-    trace_cmd.add_argument("root", help="root of the tree to audit, e.g. a mounted image")
-    trace_cmd.add_argument(
+    cmd.add_argument("root", help="root of the tree to audit, e.g. a mounted image")
+    cmd.add_argument(
         "--scan",
         action="append",
         type=_relative_dir,
@@ -125,20 +105,20 @@ def _parser() -> argparse.ArgumentParser:
         metavar="REL_DIR",
         help="relative directory to scan; repeatable (default: four system dirs)",
     )
-    trace_cmd.add_argument(
+    cmd.add_argument(
         "--marker",
         action="append",
         type=_marker,
         default=None,
         help="text that marks a file as ours; repeatable",
     )
-    trace_cmd.add_argument(
+    cmd.add_argument(
         "--fresh-window",
         type=_seconds,
         default=120,
         help="seconds within which an artifact counts as freshly touched (>= 0)",
     )
-    trace_cmd.add_argument(
+    cmd.add_argument(
         "--broad",
         action="store_true",
         default=False,
@@ -146,23 +126,56 @@ def _parser() -> argparse.ArgumentParser:
         "see docs/limits.md for the measured numbers)",
     )
 
-    dwell_cmd = subs.add_parser("dwell", parents=[common], help="dwell time and detection coverage per host")
-    dwell_cmd.add_argument("ledger", help="ndjson ledger: {ts, host, event}")
-    dwell_cmd.add_argument("--hits", default=None, help="json list of {ts, host, rule}")
 
-    batch_cmd = subs.add_parser("batch", parents=[common], help="can one signature cluster two builds")
-    batch_cmd.add_argument("features", nargs="+", help="json files with {name, features}")
-    batch_cmd.add_argument(
+def _add_dwell_arguments(subs: Any, common: argparse.ArgumentParser) -> None:
+    cmd = subs.add_parser(
+        "dwell", parents=[common], help="dwell time and detection coverage per host"
+    )
+    cmd.add_argument("ledger", help="ndjson ledger: {ts, host, event}")
+    cmd.add_argument("--hits", default=None, help="json list of {ts, host, rule}")
+
+
+def _add_batch_arguments(subs: Any, common: argparse.ArgumentParser) -> None:
+    cmd = subs.add_parser("batch", parents=[common], help="can one signature cluster two builds")
+    cmd.add_argument("features", nargs="+", help="json files with {name, features}")
+    cmd.add_argument(
         "--threshold",
         type=_threshold,
         default=batch_mod.DEFAULT_THRESHOLD,
         help="jaccard similarity at or above which builds are the same family (0.0-1.0)",
     )
+
+
+def _add_demo_arguments(subs: Any, common: argparse.ArgumentParser) -> None:
+    # the demo takes no options: it builds its own trees and audits them
     subs.add_parser(
         "demo",
         parents=[common],
         help="build throwaway trees, audit them, and show pass, partial and fail in one run",
     )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = Parser(
+        prog="residue",
+        description="Recompute how deeply an implant hid, from artifacts or ledgers.",
+    )
+    parser.add_argument("--json", action="store_true", default=False, help=_JSON_HELP)
+    parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
+
+    common = Parser(add_help=False)
+    # The help text promises both positions, so both parsers carry the flag. The
+    # subparser default is SUPPRESS: it then never touches a value the parent
+    # already set, and a bare "trace --json" still ends up true.
+    common.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help=_JSON_HELP
+    )
+
+    subs = parser.add_subparsers(dest="command")
+    _add_trace_arguments(subs, common)
+    _add_dwell_arguments(subs, common)
+    _add_batch_arguments(subs, common)
+    _add_demo_arguments(subs, common)
     return parser
 
 
