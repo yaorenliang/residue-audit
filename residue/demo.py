@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import time
 import tempfile
 from typing import Any, Dict, List, Optional
 
@@ -40,12 +39,13 @@ def _borrowed_tree(root: str) -> None:
     """
     _fixtures.make_dirs(root, trace_mod.DEFAULT_SCAN)
     _fixtures.write_neighbours(root, trace_mod.DEFAULT_SCAN)
-    # The comparison is strict (ctime_ms > cap_ms), so an artifact written in the
-    # same millisecond as its neighbours ties instead of winning. Without a beat
-    # between the two writes the ctime count drifts between runs, and the demo
-    # is quoted in the README: a sample that changes on every run is not a sample.
-    time.sleep(0.01)
     written = _fixtures.write_artifacts(root)
+    # The ctime comparison is strict, so an artifact that lands in the same clock
+    # tick as its neighbours ties instead of winning and the report loses one
+    # evidence line. A fixed sleep was a bet on the filesystem's granularity, and
+    # CI lost it: the sample the README quotes came out one line short. The
+    # fixture now checks the bet instead of making it.
+    _fixtures.separate_ctimes(written)
     _fixtures.borrow_sibling_mtimes(written)
 
 

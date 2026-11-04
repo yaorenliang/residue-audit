@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Dict, List, Optional
 
 from . import stat_io
@@ -77,6 +78,57 @@ def write_neighbours(root: str, dirs) -> List[str]:
             stat_io.set_mtime_ms(path, NEIGHBOUR_MS)
             made.append(path)
     return made
+
+
+def _ctime_ms(path: str) -> Optional[int]:
+    """The ctime of path in milliseconds, or None when it cannot be read."""
+    info, _ = stat_io.stat_of(path)
+    return None if info is None else info.ctime_ms
+
+
+def separate_ctimes(
+    paths: List[str], first_wait_s: float = 0.01, rounds: int = 6
+) -> None:
+    """Make every artifact's ctime strictly newer than the siblings beside it.
+
+    ``trace.ctime`` compares strictly (ctime_ms > the newest sibling ctime), so
+    two writes that land in the same clock tick tie: the artifact stops winning,
+    one evidence line disappears from the report, and a sample quoted in the
+    README changes length between runs. A single sleep before writing is a bet on
+    the filesystem's ctime granularity - 10ms is enough on ext4 and not enough on
+    the coarser ticks a CI runner reports - and a bet is not a fixture. So the
+    bet is checked: after each round, every artifact that still ties is rewritten
+    (writing is what moves a ctime forward) and the next round waits twice as
+    long. A tree still tied after ``rounds`` raises, because a drifting sample is
+    worse than a red test.
+
+    Only the artifacts' own ctimes move. Rewriting an existing file leaves the
+    holding directory's ctime alone, so the directory check keeps answering the
+    same way it did before.
+    """
+    ours = set(paths)
+    pending = list(paths)
+    wait = first_wait_s
+    for _ in range(rounds):
+        if not pending:
+            return
+        time.sleep(wait)
+        still_tied: List[str] = []
+        for path in pending:
+            with open(path, "rb") as handle:
+                body = handle.read()
+            with open(path, "wb") as handle:
+                handle.write(body)
+            cap_ctime = stat_io.dir_stats(os.path.dirname(path), ours)[1]
+            stamp = _ctime_ms(path)
+            if stamp is None or stamp <= cap_ctime:
+                still_tied.append(path)
+        pending = still_tied
+        wait *= 2
+    raise RuntimeError(
+        "ctime of %d artifact(s) still ties with their siblings after %d rounds: "
+        "this filesystem cannot separate them" % (len(pending), rounds)
+    )
 
 
 def borrow_sibling_mtimes(paths, extra_ours: Optional[List[str]] = None) -> None:

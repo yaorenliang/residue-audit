@@ -62,6 +62,49 @@ def _target_of(link: str, root: str) -> str:
     return os.path.normpath(target)
 
 
+def _unreadable(step: str) -> Optional[str]:
+    """Why we will not read step, or None when lstat() says it is there.
+
+    The two failures stay apart on purpose: a missing entry is a gap in the image,
+    while an entry we may not look at is a permission problem - and reporting that
+    one as "no counterpart" would blame the image for our own blindness.
+    """
+    try:
+        os.lstat(step)
+    except FileNotFoundError:
+        return "target %s has no counterpart inside the root" % (step,)
+    except OSError as exc:
+        return "target %s: %s" % (step, exc.strerror or exc.__class__.__name__)
+    return None
+
+
+def _follow(
+    step: str, root_abs: str, seen: set, hops: int
+) -> Tuple[Optional[List[str]], int, Optional[str]]:
+    """Follow one link: (components to walk next, hops used, None) or (None, hops, why).
+
+    Kept out of resolve() so that the walk reads as one decision per iteration:
+    refuse, follow, or step into a plain directory.
+    """
+    hops += 1
+    if hops > MAX_HOPS:
+        return None, hops, "symlink chain longer than %d hops" % (MAX_HOPS,)
+    if step in seen:
+        return None, hops, "symlink loop at %s" % (step,)
+    seen.add(step)
+    try:
+        target = _target_of(step, root_abs)
+    except OSError as exc:
+        return None, hops, exc.strerror or exc.__class__.__name__
+    inner = _parts(root_abs, target)
+    if inner is None:
+        return None, hops, "%s resolves outside %s" % (
+            step,
+            os.path.basename(root_abs) or root_abs,
+        )
+    return inner, hops, None
+
+
 def resolve(root: str, path: str) -> Tuple[Optional[str], Optional[str]]:
     """(real path inside root, None) or (None, why we refuse to read it).
 
@@ -82,36 +125,15 @@ def resolve(root: str, path: str) -> Tuple[Optional[str], Optional[str]]:
             return None, "%s leaves the root" % (path,)
         step = os.path.join(current, name)
         if os.path.islink(step):
-            hops += 1
-            if hops > MAX_HOPS:
-                return None, "symlink chain longer than %d hops" % (MAX_HOPS,)
-            if step in seen:
-                return None, "symlink loop at %s" % (step,)
-            seen.add(step)
-            try:
-                target = _target_of(step, root_abs)
-            except OSError as exc:
-                return None, exc.strerror or exc.__class__.__name__
-            inner = _parts(root_abs, target)
-            if inner is None:
-                return None, "%s resolves outside %s" % (
-                    step,
-                    os.path.basename(root_abs) or root_abs,
-                )
+            inner, hops, why = _follow(step, root_abs, seen, hops)
+            if why is not None:
+                return None, why
             todo = inner + todo
             current = root_abs
             continue
-        try:
-            os.lstat(step)
-        except FileNotFoundError:
-            return None, "target %s has no counterpart inside the root" % (step,)
-        except OSError as exc:
-            # the entry is there and we are not allowed to look at it; calling that
-            # "no counterpart" reports a permission problem as a missing file
-            return None, "target %s: %s" % (
-                step,
-                exc.strerror or exc.__class__.__name__,
-            )
+        why = _unreadable(step)
+        if why is not None:
+            return None, why
         current = step
     # Hand back the path as the host spells the root (realpath of the root only):
     # /var -> /private/var is the host's business, and callers open this path. What

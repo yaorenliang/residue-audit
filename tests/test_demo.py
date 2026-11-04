@@ -17,7 +17,7 @@ import sys
 import unittest
 from unittest import mock
 
-from residue import cli, demo, report as report_mod
+from residue import _fixtures, cli, demo, report as report_mod, stat_io
 from tests import readme_sample
 from residue.model import ERROR, EXIT, FAIL, PASS, PARTIAL
 
@@ -175,6 +175,40 @@ class TheWholeDemoIsPinned(unittest.TestCase):
         # the file is generated, so it must not be edited by hand into something
         # the tool no longer prints: regenerating it twice has to be a no-op
         self.assertEqual(readme_sample.whole(), readme_sample.whole())
+
+
+class TheBorrowedTreeSeparatesItsClocks(unittest.TestCase):
+    """The README sample is only a sample if every run prints the same lines.
+
+    ``trace.ctime`` compares strictly, so an artifact written in the same clock
+    tick as its neighbours ties instead of winning: the check still fails, but it
+    lists four artifacts instead of five, and the quote in the README came out
+    one line short on a runner whose ctime granularity was coarser than the sleep
+    the fixture used to rely on. These cases pin the count and the stability, and
+    pin that an unbreakable tie is loud instead of silent.
+    """
+
+    def test_every_artifact_wins_the_ctime_race(self):
+        out = io.StringIO()
+        demo.run(out)
+        text = out.getvalue()
+        self.assertEqual(text.count("ctime_vs_cap=newer"), len(_fixtures.ARTIFACTS))
+
+    def test_the_quoted_sample_is_the_same_on_every_run(self):
+        self.assertEqual(readme_sample.sample(), readme_sample.sample())
+
+    def test_a_tie_that_cannot_be_broken_raises(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "artifact")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("body\n")
+            # a cap no rewrite can beat stands in for a filesystem whose ticks are
+            # too coarse for the tree: the fixture must refuse to hand out a sample
+            with mock.patch.object(stat_io, "dir_stats", return_value=(0, 1 << 60, 0, 1)):
+                with self.assertRaises(RuntimeError):
+                    _fixtures.separate_ctimes([path], first_wait_s=0.0, rounds=2)
 
 
 class DemoMainIsItsReport(unittest.TestCase):
