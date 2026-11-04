@@ -614,6 +614,28 @@ def _newer_than_siblings(art: ArtifactObs, group: DirObs) -> bool:
     return art.stamp is not None and art.stamp.mtime_ms > group.cap_mtime_ms
 
 
+def _sort_group(
+    group: DirObs,
+    aligned: List[ArtifactObs],
+    leaked: List[ArtifactObs],
+    ctime_hits: List[ArtifactObs],
+    order_hits: List[ArtifactObs],
+) -> None:
+    """Sort one corroborated directory's artifacts into the answers they support."""
+    for art in group.artifacts:
+        stamp = art.stamp
+        if stamp is None:
+            continue
+        if _newer_than_siblings(art, group):
+            leaked.append(art)
+        else:
+            aligned.append(art)
+        if stamp.ino > group.max_ino:
+            order_hits.append(art)
+        if stamp.ctime_ms > group.cap_ctime_ms:
+            ctime_hits.append(art)
+
+
 def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
     """Sort every artifact into the answers it supports. No verdicts here."""
     aligned: List[ArtifactObs] = []
@@ -630,18 +652,7 @@ def _hits(dirs: Sequence[DirObs], now_ms: int, fresh_window_s: int) -> Hits:
             # assumption wearing a verdict's clothes
             uncorroborated.extend(group.artifacts)
             continue
-        for art in group.artifacts:
-            stamp = art.stamp
-            if stamp is None:
-                continue
-            if _newer_than_siblings(art, group):
-                leaked.append(art)
-            else:
-                aligned.append(art)
-            if stamp.ino > group.max_ino:
-                order_hits.append(art)
-            if stamp.ctime_ms > group.cap_ctime_ms:
-                ctime_hits.append(art)
+        _sort_group(group, aligned, leaked, ctime_hits, order_hits)
     return Hits(
         tuple(aligned),
         tuple(leaked),
