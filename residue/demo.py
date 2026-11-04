@@ -19,7 +19,7 @@ import os
 import shutil
 import sys
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import _fixtures
 from . import batch as batch_mod
@@ -85,6 +85,105 @@ def _discordant_hits(tmp: str) -> str:
     return path
 
 
+# Each section is a builder: it makes its throwaway tree or its pair of inputs,
+# and returns the report the loop prints. A docstring would read well here, but
+# tests/coverage.py counts a docstring line as measurable and it can never
+# execute, so the six of them cost more module coverage than they are worth.
+def _borrowed_section(tmp: str) -> Report:
+    # artifacts written last, mtimes borrowed: the shape a real implant has
+    root = os.path.join(tmp, "leak")
+    os.makedirs(root)
+    _borrowed_tree(root)
+    return trace_mod.run(root)
+
+
+def _floor_section(tmp: str) -> Report:
+    # the same artifacts written first: the floor a synthetic tree can reach
+    root = os.path.join(tmp, "floor")
+    os.makedirs(root)
+    _ordered_tree(root)
+    return trace_mod.run(root)
+
+
+def _covered_section(tmp: str) -> Report:
+    # three of four deployed hosts were seen: coverage, not luck
+    return dwell_mod.run(_coverage_ledger(tmp), _discordant_hits(tmp))
+
+
+def _half_section(tmp: str) -> Report:
+    # exactly half of the deployed hosts is not coverage
+    ledger = os.path.join(tmp, "ledger.ndjson")
+    _fixtures.write_ledger(ledger, _fixtures.LEDGER)
+    hits = os.path.join(tmp, "hits.json")
+    _fixtures.write_hits(hits, _fixtures.HITS)
+    return dwell_mod.run(ledger, hits)
+
+
+def _cluster_section(tmp: str) -> Report:
+    # two builds one feature apart: they still cluster
+    near = os.path.join(tmp, "near-a.json")
+    near_b = os.path.join(tmp, "near-b.json")
+    _fixtures.write_json(near, _fixtures.feature_set("build-a"))
+    _fixtures.write_json(near_b, _fixtures.feature_set("build-b", tail="feature-999"))
+    return batch_mod.run([near, near_b])
+
+
+def _apart_section(tmp: str) -> Report:
+    # two builds with nothing in common: they do not cluster
+    far = os.path.join(tmp, "far-a.json")
+    far_b = os.path.join(tmp, "far-b.json")
+    _fixtures.write_json(far, {"name": "build-c", "features": ["alpha", "beta", "gamma"]})
+    _fixtures.write_json(far_b, {"name": "build-d", "features": ["delta", "epsilon"]})
+    return batch_mod.run([far, far_b])
+
+
+# The six sections in the order a reader meets them: name, title, note, and the
+# builder that produces the report the loop prints. The order is the output.
+_SECTIONS: List[Tuple[str, str, str, Callable[[str], Report]]] = [
+    (
+        "borrowed",
+        "artifacts written last, mtimes borrowed from a neighbour",
+        "note: order and ctime still fail here. utimensat rewrites a timestamp;\n"
+        "      nothing user-space can rewrite the inode number or the ctime.\n",
+        _borrowed_section,
+    ),
+    (
+        "floor",
+        "same artifacts written first: the floor for a synthetic tree",
+        "note: alignment, freshness, ctime and order pass. The holding\n"
+        "      directories were still created today, so directory_ctime stays\n"
+        "      partial: a ctime cannot be moved backwards. This is the floor.\n",
+        _floor_section,
+    ),
+    ("covered", "three of four deployed hosts were seen: coverage", "", _covered_section),
+    (
+        "half",
+        "two of four deployed hosts were seen: exactly half is not coverage",
+        "",
+        _half_section,
+    ),
+    ("cluster", "two builds one feature apart: they still cluster", "", _cluster_section),
+    ("apart", "two builds with nothing in common: they do not cluster", "", _apart_section),
+]
+
+
+def _sections_check(facts: Dict[str, Any]) -> Check:
+    """One verdict for the run itself: did the six sections show every verdict?"""
+    wanted = {PASS, PARTIAL, FAIL}
+    missing = sorted(wanted - set(facts["verdicts"].values()))
+    if missing:
+        return Check(
+            "demo.sections",
+            FAIL,
+            "the demo no longer shows every verdict: missing %s" % (", ".join(missing),),
+        )
+    return Check(
+        "demo.sections",
+        PASS,
+        "%d section(s) show pass, partial and fail verdicts" % (len(facts["sections"]),),
+    )
+
+
 def run(prose=None) -> Report:
     """Print every section to prose, and return the report to exit on.
 
@@ -115,85 +214,9 @@ def run(prose=None) -> Report:
             facts["sections"].append(name)
             facts["verdicts"][name] = report.status()
 
-        leak_root = os.path.join(tmp, "leak")
-        os.makedirs(leak_root)
-        _borrowed_tree(leak_root)
-        section(
-            "borrowed",
-            "artifacts written last, mtimes borrowed from a neighbour",
-            trace_mod.run(leak_root),
-            "note: order and ctime still fail here. utimensat rewrites a timestamp;\n"
-            "      nothing user-space can rewrite the inode number or the ctime.\n",
-        )
-
-        floor_root = os.path.join(tmp, "floor")
-        os.makedirs(floor_root)
-        _ordered_tree(floor_root)
-        section(
-            "floor",
-            "same artifacts written first: the floor for a synthetic tree",
-            trace_mod.run(floor_root),
-            "note: alignment, freshness, ctime and order pass. The holding\n"
-            "      directories were still created today, so directory_ctime stays\n"
-            "      partial: a ctime cannot be moved backwards. This is the floor.\n",
-        )
-
-        covered_ledger = _coverage_ledger(tmp)
-        section(
-            "covered",
-            "three of four deployed hosts were seen: coverage",
-            dwell_mod.run(covered_ledger, _discordant_hits(tmp)),
-        )
-
-        ledger = os.path.join(tmp, "ledger.ndjson")
-        _fixtures.write_ledger(ledger, _fixtures.LEDGER)
-        hits = os.path.join(tmp, "hits.json")
-        _fixtures.write_hits(hits, _fixtures.HITS)
-        section(
-            "half",
-            "two of four deployed hosts were seen: exactly half is not coverage",
-            dwell_mod.run(ledger, hits),
-        )
-
-        near = os.path.join(tmp, "near-a.json")
-        near_b = os.path.join(tmp, "near-b.json")
-        _fixtures.write_json(near, _fixtures.feature_set("build-a"))
-        _fixtures.write_json(near_b, _fixtures.feature_set("build-b", tail="feature-999"))
-        section(
-            "cluster",
-            "two builds one feature apart: they still cluster",
-            batch_mod.run([near, near_b]),
-        )
-
-        far = os.path.join(tmp, "far-a.json")
-        far_b = os.path.join(tmp, "far-b.json")
-        _fixtures.write_json(far, {"name": "build-c", "features": ["alpha", "beta", "gamma"]})
-        _fixtures.write_json(far_b, {"name": "build-d", "features": ["delta", "epsilon"]})
-        section(
-            "apart",
-            "two builds with nothing in common: they do not cluster",
-            batch_mod.run([far, far_b]),
-        )
-
-        wanted = {PASS, PARTIAL, FAIL}
-        seen = set(facts["verdicts"].values())
-        missing = sorted(wanted - seen)
-        if missing:
-            checks.append(
-                Check(
-                    "demo.sections",
-                    FAIL,
-                    "the demo no longer shows every verdict: missing %s" % (", ".join(missing),),
-                )
-            )
-        else:
-            checks.append(
-                Check(
-                    "demo.sections",
-                    PASS,
-                    "%d section(s) show pass, partial and fail verdicts" % (len(facts["sections"]),),
-                )
-            )
+        for name, title, note, build in _SECTIONS:
+            section(name, title, build(tmp), note)
+        checks.append(_sections_check(facts))
         return Report("demo", checks, facts)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
