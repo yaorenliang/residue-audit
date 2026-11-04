@@ -191,36 +191,45 @@ def dir_entries(path: str) -> Tuple[Dict[str, List[str]], List[StatError]]:
     return groups, errors
 
 
-def walk_files(root: str, rel_dir: str) -> Tuple[List[str], List[StatError]]:
-    """Scan members directly inside root/rel_dir (no recursion), plus every failure.
+def _list_inside(root: str, base: str) -> Tuple[List[str], List[StatError], bool]:
+    """The names inside root/base, or the failure, or "there is no such directory".
 
-    Members are regular files plus links that resolve to one *inside root*. Both
-    are visible to ls, so both have to be visible here - and a link that could not
-    be resolved inside the image is reported instead of being dropped.
+    List the directory the image names, not the one the host resolves: a scan
+    directory that is itself a link (/usr/libexec -> /usr/lib, the usual merged-usr
+    shape) used to enumerate the host tree, so the image's files vanished from the
+    report and the host's files were reported as paths that resolve outside.
+
+    resolve() answers "no counterpart" both for a directory that is missing and for
+    one it was not allowed to walk, and os.path.lexists() says False for both under
+    a parent we cannot search. So ask the tree itself: a partial image is missing
+    default directories and that is not a gap, while a directory that is there but
+    unreachable is one and must reach the report.
+    """
+    listing, why = inside.resolve(root, base)
+    if listing is not None:
+        names, err = listdir_sorted(listing)
+        return names, [err] if err is not None else [], False
+    try:
+        os.lstat(base)
+    except FileNotFoundError:
+        return [], [], True
+    except OSError as exc:
+        why = why or exc.strerror
+    # one construction for both failures: a walk we were refused and a path that
+    # is there but has no counterpart inside the image read the same to a caller
+    return [], [StatError(base, "resolve", why or "unresolvable directory")], False
+
+
+def walk_files(root: str, rel_dir: str) -> Tuple[List[str], List[StatError]]:
+    """Members directly inside root/rel_dir, plus every failure.
+
+    Members are regular files plus links that resolve to one *inside root*.
     """
     base = os.path.join(root, rel_dir)
-    # List the directory the image names, not the one the host resolves: a scan
-    # directory that is itself a link (/usr/libexec -> /usr/lib, the usual merged-usr
-    # shape) used to enumerate the host tree, so the image's files vanished from the
-    # report and the host's files were reported as paths that resolve outside.
-    listing, why = inside.resolve(root, base)
-    if listing is None:
-        # resolve() answers "no counterpart" both for a directory that is missing
-        # and for one it was not allowed to walk, and os.path.lexists() says False
-        # for both under a parent we cannot search. Ask the tree itself: a partial
-        # image is missing default directories and that is not a gap, while a
-        # directory that is there but unreachable is one and must reach the report.
-        try:
-            os.lstat(base)
-        except FileNotFoundError:
-            # a partial tree does not have every default directory; that is not a gap
-            return [], []
-        except OSError as exc:
-            return [], [StatError(base, "resolve", why or exc.strerror or "unresolvable directory")]
-        return [], [StatError(base, "resolve", why or "unresolvable directory")]
-    names, err = listdir_sorted(listing)
+    names, errors, absent = _list_inside(root, base)
+    if absent:
+        return [], []  # a partial tree lacks default directories; that is not a gap
     paths: List[str] = []
-    errors: List[StatError] = [err] if err is not None else []
     for name in names:
         full = os.path.join(base, name)  # the name the caller asked about
         member, member_err = is_member(full, root)
