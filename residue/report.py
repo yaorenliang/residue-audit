@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from .model import Report
 
@@ -95,7 +95,3 @@ def as_text(report: Report) -> str:
 
 def render(report: Report, want_json: bool) -> str:
     return as_json(report) if want_json else as_text(report)
-
-
-def facts_line(facts: Dict[str, Any]) -> str:
-    return " ".join("%s=%s" % (k, facts[k]) for k in sorted(facts))
