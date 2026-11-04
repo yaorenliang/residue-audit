@@ -41,7 +41,7 @@ def jaccard(a: set, b: set) -> Optional[float]:
     if not a and not b:
         return None
     union = a | b
-    return len(a & b) / len(union) if union else 0.0
+    return len(a & b) / len(union)
 
 
 def _names(sets: List[Dict[str, object]]) -> List[str]:
