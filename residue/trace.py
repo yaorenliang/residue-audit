@@ -422,27 +422,34 @@ def _claim(scratch: _Scratch) -> None:
                 _weak(scratch, path, "named by a unit, not audited without --broad")
                 continue
             reason = "broad:" + broad
-        # A marker found inside the read window is a claim we did earn, even when
-        # the file ran past the window: the truncation stays visible in
-        # facts.truncated_files and in the partial verdicts. Counting the same
-        # path as both an artifact and a weak claim reported "+1 weak claim(s) not
-        # audited" about a file the report had just audited.
-        if inside.is_link(path):
-            # a link is how systemd enables a unit: the link is the artifact as
-            # much as what it points at, and the reader should see which
-            reason = reason + " via=symlink"
-            if _absolute_link(path):
-                # an absolute target means "inside this image", which is not what
-                # the host would resolve: the path was read through our mapping
-                scratch.absolute_links += 1
-        entry, _ = _entry_path(scratch, path)
-        if (entry or path) in taken:
-            # /usr/libexec and /usr/lib are two spellings of one directory in a
-            # merged-usr image. Counting the file under both names reported two
-            # artifacts for an image that holds one.
-            continue
-        taken[entry or path] = path
-        scratch.claims[path] = reason
+        _finalize_claim(scratch, path, reason, taken)
+
+
+def _finalize_claim(
+    scratch: _Scratch, path: str, reason: str, taken: Dict[str, str]
+) -> None:
+    """Record one earned claim: symlink marker, merged-usr dedupe, ledger write."""
+    # A marker found inside the read window is a claim we did earn, even when
+    # the file ran past the window: the truncation stays visible in
+    # facts.truncated_files and in the partial verdicts. Counting the same
+    # path as both an artifact and a weak claim reported "+1 weak claim(s) not
+    # audited" about a file the report had just audited.
+    if inside.is_link(path):
+        # a link is how systemd enables a unit: the link is the artifact as
+        # much as what it points at, and the reader should see which
+        reason = reason + " via=symlink"
+        if _absolute_link(path):
+            # an absolute target means "inside this image", which is not what
+            # the host would resolve: the path was read through our mapping
+            scratch.absolute_links += 1
+    entry, _ = _entry_path(scratch, path)
+    if (entry or path) in taken:
+        # /usr/libexec and /usr/lib are two spellings of one directory in a
+        # merged-usr image. Counting the file under both names reported two
+        # artifacts for an image that holds one.
+        return
+    taken[entry or path] = path
+    scratch.claims[path] = reason
 
 
 def _readable_path(scratch: _Scratch, path: str) -> Optional[str]:
@@ -487,7 +494,9 @@ def _stamp(scratch: _Scratch) -> Tuple[ArtifactObs, ...]:
         stamp, err = (None, None) if entry is None else stat_io.stat_of(entry)
         if entry is None:
             _record(scratch, stat_io.StatError(path, "resolve", why or "unresolvable link"))
-        elif stamp is None and err is not None:
+        elif stamp is None:
+            # stat_of() answers (Stat, None) or (None, StatError): a missing stamp
+            # already means the error is the other half of that pair
             _record(scratch, err)
         out.append(ArtifactObs(path, sanitize(path, scratch.root), scratch.claims[path], stamp))
     return tuple(out)
