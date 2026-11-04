@@ -186,7 +186,7 @@ L3 说「六个产物里有一个超了」，超的就是那个客户端二进�
 git clone https://github.com/yaorenliang/residue-audit
 cd residue-audit
 make demo     # 零依赖，不联网，不需要 root
-make verify   # 16 条单测 + L3 交叉复算
+make verify   # 单测 + L3 交叉复算
 make lab      # 真实 ext4 客机，无外网
 ```
 

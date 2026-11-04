@@ -205,3 +205,41 @@ class MakefileDemoRuns(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, text[-2000:])
         self.assertIn("summary command=demo", text)
         self.assertIn("status=fail", text)
+
+
+class ReleaseNotes(unittest.TestCase):
+    """docs/RELEASE-v0.1.0.md is a claim sheet, so it is checked like one."""
+
+    def setUp(self):
+        self.text = read_doc(os.path.join("docs", "RELEASE-v0.1.0.md"))
+
+    def test_every_check_the_tool_emits_is_named(self):
+        import shutil
+        import tempfile
+        from residue import dwell
+        from tests import fixtures as fx
+
+        tmp = tempfile.mkdtemp(prefix="residue-release-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ledger = os.path.join(tmp, "ledger.ndjson")
+        hits = os.path.join(tmp, "hits.json")
+        fx.write_ledger(ledger, fx.LEDGER)
+        fx.write_json(hits, fx.HITS)
+        names = [check.name for check in dwell.run(ledger, hits).checks]
+        golden = os.path.join(ROOT, "tests", "golden", "trace_clean.json")
+        with open(golden, encoding="utf-8") as handle:
+            names += [check["name"] for check in json.load(handle)["checks"]]
+        self.assertEqual(len(names), 13)
+        for name in names:
+            self.assertIn("`%s`" % name, self.text, "release notes never name %s" % name)
+        self.assertIn("`batch.<a>_vs_<b>`", self.text)
+
+    def test_it_does_not_deny_a_check_the_binary_runs(self):
+        self.assertNotIn("does not check directory ctime", self.text)
+        self.assertIn("trace.directory_ctime", self.text)
+
+    def test_it_does_not_freeze_a_test_count(self):
+        self.assertIsNone(re.search(r"\b\d+\s+unit tests", self.text))
+
+    def test_every_flag_it_mentions_exists(self):
+        self.assertEqual(documented_flags(self.text) - parser_flags(), set())

@@ -44,7 +44,33 @@ def jaccard(a: set, b: set) -> Optional[float]:
     return len(a & b) / len(union) if union else 0.0
 
 
-def _pairs(sets: List[Dict[str, object]]) -> List[Tuple[str, Optional[float]]]:
+def _names(sets: List[Dict[str, object]]) -> List[str]:
+    """One name per set, unique within this run.
+
+    Two feature files that both say "build" used to yield three checks all called
+    batch.build_vs_build and a sizes map with one entry, so the report showed one
+    build where it had compared three. The first keeps its name; later repeats are
+    numbered until they do not collide.
+    """
+    counts: Dict[str, int] = {}
+    for item in sets:
+        base = str(item["name"])
+        counts[base] = counts.get(base, 0) + 1
+    used: Dict[str, int] = {}
+    names: List[str] = []
+    for item in sets:
+        base = str(item["name"])
+        if counts[base] == 1:
+            names.append(base)
+            continue
+        used[base] = used.get(base, 0) + 1
+        names.append("%s#%d" % (base, used[base]))
+    return names
+
+
+def _pairs(
+    sets: List[Dict[str, object]], names: List[str]
+) -> List[Tuple[str, Optional[float]]]:
     """Every pair once, with the similarity it carries - None when undefined.
 
     Computed once and handed to both the checks and the summary. The summary used
@@ -54,10 +80,10 @@ def _pairs(sets: List[Dict[str, object]]) -> List[Tuple[str, Optional[float]]]:
     """
     return [
         (
-            "batch.%s_vs_%s" % (left["name"], right["name"]),
-            jaccard(left["features"], right["features"]),
+            "batch.%s_vs_%s" % (names[i], names[j]),
+            jaccard(sets[i]["features"], sets[j]["features"]),
         )
-        for left, right in combinations(sets, 2)
+        for i, j in combinations(range(len(sets)), 2)
     ]
 
 
@@ -82,7 +108,8 @@ def _verdict(score: Optional[float], threshold: float) -> Tuple[str, str]:
 
 def run(paths: List[str], threshold: float = DEFAULT_THRESHOLD) -> Report:
     sets = [load_features(p) for p in paths]
-    pairs = _pairs(sets)
+    names = _names(sets)
+    pairs = _pairs(sets, names)
     checks = [Check(name, *_verdict(score, threshold)) for name, score in pairs]
 
     defined = [score for _, score in pairs if score is not None]
@@ -92,7 +119,7 @@ def run(paths: List[str], threshold: float = DEFAULT_THRESHOLD) -> Report:
         {
             "pairs": len(pairs),
             "threshold": threshold,
-            "sizes": {s["name"]: len(s["features"]) for s in sets},
+            "sizes": {name: len(item["features"]) for name, item in zip(names, sets)},
             "min_similarity": round(min(defined), 4) if defined else None,
         },
     )

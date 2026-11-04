@@ -80,6 +80,36 @@ def carries_marker(text: str, markers: Sequence[str]) -> bool:
     return False
 
 
+def _exec_tokens(text: str) -> List[str]:
+    """Split a command line the way systemd does, quotes included.
+
+    systemd.syntax(7) lets a quoted argument carry whitespace, so
+    ExecStart="/usr/local/bin/my tool" names one binary. Splitting on whitespace
+    first cut that path in two, claimed the truncated prefix, and left the real
+    binary unclaimed with no error to say so.
+    """
+    tokens: List[str] = []
+    buff: List[str] = []
+    quote = ""
+    for char in text:
+        if quote:
+            if char == quote:
+                quote = ""
+            else:
+                buff.append(char)
+        elif char in "'\"":
+            quote = char
+        elif char.isspace():
+            if buff:
+                tokens.append("".join(buff))
+                buff = []
+        else:
+            buff.append(char)
+    if buff:
+        tokens.append("".join(buff))
+    return tokens
+
+
 def exec_start_targets(line: str) -> List[str]:
     """Absolute paths started by one ExecStart= line, in any accepted form.
 
@@ -95,8 +125,7 @@ def exec_start_targets(line: str) -> List[str]:
     if not body.startswith("="):
         return []
     out: List[str] = []
-    for token in body[1:].split():
-        token = token.strip("'\"")
+    for token in _exec_tokens(body[1:]):
         while token and token[0] in EXEC_PREFIXES:
             token = token[1:]
         if token.startswith("/"):
@@ -371,17 +400,16 @@ def _claim(scratch: _Scratch) -> None:
     """Decide which scanned paths are claims, and record the rest as weak or idle."""
     units, targets = _marker_units(scratch)
     names = _broad_names(scratch, targets)
+    taken: Dict[str, str] = {}
     for path in _members(scratch):
         reason = _strong_claim(scratch, path, units, targets)
         _, truncated = _head(scratch, path)
-        if truncated:
-            # stopping before the end of a file is a gap in the measurement, and
-            # it stays one whether or not the part we read happened to be enough
-            _weak(scratch, path, "cut off before the end of the file")
         if reason is None:
             if truncated:
+                # stopping before the end of a file is a gap in the measurement:
                 # "not ours" is a claim we did not earn when we stopped reading
-                # before the end of the file
+                # before the end of the file, and the gap stays visible as weak
+                _weak(scratch, path, "cut off before the end of the file")
                 continue
             # A file the broad rule would have claimed is a candidate we are
             # deliberately not auditing. Everything else - ordinary system files -
@@ -394,6 +422,11 @@ def _claim(scratch: _Scratch) -> None:
                 _weak(scratch, path, "named by a unit, not audited without --broad")
                 continue
             reason = "broad:" + broad
+        # A marker found inside the read window is a claim we did earn, even when
+        # the file ran past the window: the truncation stays visible in
+        # facts.truncated_files and in the partial verdicts. Counting the same
+        # path as both an artifact and a weak claim reported "+1 weak claim(s) not
+        # audited" about a file the report had just audited.
         if inside.is_link(path):
             # a link is how systemd enables a unit: the link is the artifact as
             # much as what it points at, and the reader should see which
@@ -402,6 +435,13 @@ def _claim(scratch: _Scratch) -> None:
                 # an absolute target means "inside this image", which is not what
                 # the host would resolve: the path was read through our mapping
                 scratch.absolute_links += 1
+        entry, _ = _entry_path(scratch, path)
+        if (entry or path) in taken:
+            # /usr/libexec and /usr/lib are two spellings of one directory in a
+            # merged-usr image. Counting the file under both names reported two
+            # artifacts for an image that holds one.
+            continue
+        taken[entry or path] = path
         scratch.claims[path] = reason
 
 
@@ -533,13 +573,26 @@ def _fresh(
     alignment loop meant two copies of the question - one for artifacts with a
     sibling and one for artifacts without - and a new branch could answer only one
     of them.
+
+    A timestamp ahead of "now" counts. It is not evidence of a recent edit but of
+    a clock that disagrees with the tree, which deserves the same attention; the
+    window check used to swallow it by accident, since a negative difference is
+    always "within the window" under floor division, and the report then dated a
+    file years ahead of the check to "within 120s of now".
     """
     return tuple(
         art
         for art in artifacts
         if art.stamp is not None
-        and (now_ms - art.stamp.mtime_ms) // 1000 <= window_s
+        and _fresh_hit(now_ms, art.stamp.mtime_ms, window_s)
     )
+
+
+def _fresh_hit(now_ms: int, mtime_ms: int, window_s: int) -> bool:
+    """Whether one mtime belongs in the freshness window."""
+    if mtime_ms > now_ms:
+        return True
+    return (now_ms - mtime_ms) // 1000 <= window_s
 
 
 def _newer_than_siblings(art: ArtifactObs, group: DirObs) -> bool:
@@ -856,7 +909,8 @@ def _check_fresh(obs: Observations) -> Check:
         "fresh",
         hits,
         "no artifact carries an mtime within %ds of now" % window,
-        "%d artifact(s) still carry an mtime within %ds of now" % (len(hits), window),
+        "%d artifact(s) carry an mtime within %ds of now or ahead of it"
+        % (len(hits), window),
         [Evidence(art.shown, "fresh_window_s", str(window)) for art in hits],
     )
 

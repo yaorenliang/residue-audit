@@ -435,5 +435,45 @@ class ADirectoryIsOnlyNewerPastTheFrame(unittest.TestCase):
         self.assertIn("no holding directory carries a ctime above", why)
 
 
+class ReportedWordsTest(unittest.TestCase):
+    """What the report says, checked against the input it was given."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-trace-words-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_quoted_command_with_spaces_names_one_binary(self):
+        # systemd.syntax(7) lets a quoted argument carry whitespace. Splitting on
+        # whitespace first claimed "/usr/local/bin/my" and left the real binary
+        # unclaimed with no error to say so.
+        line = 'ExecStart="/usr/local/bin/my tool" --flag'
+        self.assertEqual(trace.exec_start_targets(line), ["/usr/local/bin/my tool"])
+
+    def test_two_spellings_of_one_directory_are_one_artifact(self):
+        # merged-usr images carry /usr/libexec as a link to /usr/lib, so a scan
+        # naming both found one file under two spellings and counted it twice
+        root = os.path.join(self.tmp, "merged")
+        os.makedirs(os.path.join(root, "usr/lib"))
+        with open(
+            os.path.join(root, "usr/lib/worker.service"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write(
+                "[Service]\nExecStart=/usr/local/bin/implant\nKillSignal=SIGCONT\n"
+            )
+        os.symlink("lib", os.path.join(root, "usr/libexec"))
+        report = trace.run(root, scan=["usr/lib", "usr/libexec"], now_ms=fx.LATER_MS)
+        audit = [c for c in report.checks if c.name == "trace.artifacts"][0]
+        self.assertEqual(len(audit.evidence), 1)
+
+    def test_an_mtime_ahead_of_the_clock_is_not_dated_within_the_window(self):
+        root = os.path.join(self.tmp, "future")
+        os.makedirs(root)
+        written = fx.plant(root, align=False)
+        stat_io.set_mtime_ms(written[0], fx.LATER_MS + 86_400_000 * 365)
+        report = trace.run(root, now_ms=fx.LATER_MS)
+        fresh = [c for c in report.checks if c.name == "trace.fresh"][0]
+        self.assertEqual(fresh.status, FAIL)
+        self.assertIn("ahead of it", fresh.why)
+
 if __name__ == "__main__":
     unittest.main()

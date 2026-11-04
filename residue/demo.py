@@ -211,7 +211,11 @@ def main() -> int:
     try:
         report = run(sys.stdout)
         sys.stdout.write(report_mod.render(report, False))
+        if not report_mod.flush_stdout():
+            sys.stderr.write("residue: error: stdout closed before the report was written\n")
+            return EXIT[ERROR]
     except Exception as exc:  # noqa: BLE001 - the boundary itself is the point
+        report_mod.flush_stdout()
         sys.stderr.write("residue: error: %s: %s\n" % (exc.__class__.__name__, exc))
         return EXIT[ERROR]
     return report.exit_code()

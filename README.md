@@ -271,7 +271,7 @@ Four layers, plus a floor. The middle two are the ones that matter.
 | layer | what it proves | how |
 |---|---|---|
 | L0 | the verdict is what we said it is | fixture to golden JSON, field by field |
-| L1 | each check can fail | a negative input that must not pass: 8 checks, 8 negative controls, plus one case for a recognized-but-unreadable path |
+| L1 | each check can fail | a negative input that must not pass: 14 checks across three commands, negative controls in `tests/`, plus one case for a recognized-but-unreadable path |
 | L2 | the claim holds on ext4, not only on macOS temp dirs | QEMU guest, `-netdev user,restrict=on` |
 | L3 | the number survives a different implementation | shell and `stat(1)` recompute, diffed against ours |
 | floor | the suite covers what it claims | `make cov` fails under the total floor, and under any module more than 2 points below `tests/coverage_baseline.json` |

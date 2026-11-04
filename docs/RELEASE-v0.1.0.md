@@ -1,7 +1,8 @@
 # v0.1.0: first measurement release
 
-**What this release is.** Three checks that recompute how well a hidden implant
-hid, and the machinery to prove the recomputation is not self-attestation.
+**What this release is.** Fourteen checks across three commands that recompute how
+well a hidden implant hid, and the machinery to prove the recomputation is not
+self-attestation.
 
 **What it is not.** A scanner, a framework, or a toolkit. Nothing here executes
 against a host; every subcommand reads a path or a JSON file and returns a verdict.
@@ -10,23 +11,29 @@ against a host; every subcommand reads a path or a JSON file and returns a verdi
 
 | name | question | verdicts |
 |---|---|---|
-| `trace.artifacts` | which files under the root match the artifact markers | pass / skip |
-| `trace.aligned` | is each artifact's mtime no newer than the newest non-artifact sibling | pass / partial / fail |
-| `trace.corroborated` | does such a sibling exist at all | pass / partial / skip |
+| `trace.artifacts` | which files under the root match the artifact markers | pass / partial / skip |
+| `trace.aligned` | is each artifact's mtime no newer than the newest non-artifact sibling | pass / partial / fail / skip |
+| `trace.corroborated` | does such a sibling exist at all | pass / partial |
 | `trace.ctime` | did the artifact's status-change time outrun every sibling | pass / fail |
-| `trace.fresh` | was the tree written inside the freshness window | pass / fail |
+| `trace.directory_ctime` | does the holding directory's ctime outrun the artifacts inside it | pass / partial |
+| `trace.fresh` | was the tree written inside the freshness window, or dated ahead of the clock | pass / fail |
 | `trace.order` | is the artifact's inode higher than every sibling's | pass / fail |
+| `trace.readable` | could every scanned path be read | pass / partial |
 | `dwell.span` | per-host presence, min/median/p90/max | pass / skip |
 | `dwell.coverage` | hits over **deployed** hosts, pre/post split, half is not a majority | pass / partial / skip |
 | `dwell.data` | is there a ledger to measure | pass / skip |
-| `batch.A_vs_B` | Jaccard of feature sets against the threshold | pass / partial / fail |
+| `dwell.hosts` | how many hosts deployed, mined, failed | pass |
+| `dwell.schema` | does every event carry a kind the tool knows | pass / partial |
+| `batch.<a>_vs_<b>` | Jaccard of feature sets against the threshold, one check per pair | pass / partial / fail / skip |
 
 ## What it can honestly claim
 
 * **Recomputable.** `tests/cross_check.sh` identifies with `residue` and measures
   with `stat(1)`; the two counts must agree or the script fails.
-* **Falsifiable.** Sixteen unit tests, of which five are negative controls: every
-  check has an input on which it must not pass.
+* **Falsifiable.** Every check has an input on which it must not pass, and the
+  negative controls in `tests/` name both the input and the verdict it must not
+  reach. The counts live in the suite, not in this note: a number written here
+  rots the first time a test is added.
 * **Portable.** Zero dependencies, Python 3.9+, runs on Linux and macOS in CI; the
   QEMU lab runs the same fixtures on real ext4 with no egress.
 
@@ -34,9 +41,10 @@ against a host; every subcommand reads a path or a JSON file and returns a verdi
 
 * It does not read memory, `/proc`, deleted inodes, or any filesystem state that
   is not on disk right now.
-* It does not check directory ctime. Writing a file updates the parent directory's
-  mtime and ctime, and ctime cannot be set. This is the most likely way the tool
-  returns `pass` on a dirty host. Documented in `docs/limits.md`.
+* A directory stamp is a lead, not a verdict. `trace.directory_ctime` compares the
+  holding directory's ctime against the artifacts inside it and can reach
+  `partial`; it never reaches `fail`, because a package upgrade touches the same
+  directory in the same order. Documented in `docs/limits.md`.
 * `ctime` proves the file changed after its siblings, not that an attacker changed it.
 * Inode order is a floor: reuse after deletion blunts it.
 * `batch` sees one projection of a build. A low score is not a proof of unlinkability.
@@ -45,7 +53,7 @@ against a host; every subcommand reads a path or a JSON file and returns a verdi
 
 ```
 residue/        model, stat_io, report, trace, dwell, batch, cli, demo
-tests/          15 unit tests, golden contracts, negative controls, cross_check.sh
+tests/          unit tests, golden contracts, negative controls, cross_check.sh
 lab/            one-command QEMU guest: read-only 9p mount, no egress
 docs/           method (EN/中文), limits (EN/中文), essay (中文)
 ```

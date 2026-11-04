@@ -243,5 +243,33 @@ class RenderRobustnessTests(CliCase):
         self.assertIn("alpha", out)
 
 
+class FlushStdoutTest(unittest.TestCase):
+    """A report that could not be delivered is a tool failure, not an exit 120."""
+
+    def test_a_delivered_report_returns_true(self):
+        from residue import report
+
+        self.assertTrue(report.flush_stdout())
+
+    def test_a_reader_that_left_returns_false_without_raising(self):
+        from residue import report
+
+        class Closed:
+            def __init__(self, fd):
+                self.fd = fd
+
+            def flush(self):
+                raise BrokenPipeError()
+
+            def fileno(self):
+                return self.fd
+
+        fd = os.open(os.devnull, os.O_WRONLY)
+        self.addCleanup(os.close, fd)
+        original = sys.stdout
+        sys.stdout = Closed(fd)
+        self.addCleanup(setattr, sys, "stdout", original)
+        self.assertFalse(report.flush_stdout())
+
 if __name__ == "__main__":
     unittest.main()

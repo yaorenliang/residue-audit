@@ -96,5 +96,29 @@ class InsideTest(unittest.TestCase):
         self.assertFalse(inside.is_link(entry))
 
 
+class PermissionTest(unittest.TestCase):
+    """A path we may not look at is not a path that is not there."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-inside-perm-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = os.path.join(self.tmp, "img")
+        os.makedirs(os.path.join(self.root, "etc/cron.d"))
+        with open(
+            os.path.join(self.root, "etc/cron.d/implant"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write("x")
+        self.locked = os.path.join(self.root, "etc")
+        os.chmod(self.locked, 0o444)
+        self.addCleanup(os.chmod, self.locked, 0o755)
+
+    def test_an_unsearchable_directory_is_not_an_absent_one(self):
+        found, why = inside.resolve(
+            self.root, os.path.join(self.locked, "cron.d", "implant")
+        )
+        self.assertIsNone(found)
+        self.assertNotIn("no counterpart", why)
+        self.assertIn("Permission denied", why)
+
 if __name__ == "__main__":
     unittest.main()

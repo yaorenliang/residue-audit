@@ -4,9 +4,29 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any, Dict
 
 from .model import Report
+
+
+def flush_stdout() -> bool:
+    """Deliver the buffered report; False means the reader left first.
+
+    stdout is block-buffered when piped, so a report smaller than the buffer is
+    written successfully and only fails at interpreter shutdown - where the
+    failure is not ours to catch and Python exits 120, outside the 0..4 range
+    README.md promises. Flushing here moves the failure inside main(), and the
+    fd is pointed at devnull so the shutdown flush has somewhere harmless to go.
+    A report that could not be delivered is a tool failure (4), never a verdict.
+    """
+    try:
+        sys.stdout.flush()
+        return True
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return False
 
 
 def _jsonable(value: Any, key: str = "") -> Any:

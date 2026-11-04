@@ -101,8 +101,17 @@ def resolve(root: str, path: str) -> Tuple[Optional[str], Optional[str]]:
             todo = inner + todo
             current = root_abs
             continue
-        if not os.path.lexists(step):
+        try:
+            os.lstat(step)
+        except FileNotFoundError:
             return None, "target %s has no counterpart inside the root" % (step,)
+        except OSError as exc:
+            # the entry is there and we are not allowed to look at it; calling that
+            # "no counterpart" reports a permission problem as a missing file
+            return None, "target %s: %s" % (
+                step,
+                exc.strerror or exc.__class__.__name__,
+            )
         current = step
     # Hand back the path as the host spells the root (realpath of the root only):
     # /var -> /private/var is the host's business, and callers open this path. What

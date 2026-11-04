@@ -205,9 +205,18 @@ def walk_files(root: str, rel_dir: str) -> Tuple[List[str], List[StatError]]:
     # report and the host's files were reported as paths that resolve outside.
     listing, why = inside.resolve(root, base)
     if listing is None:
-        if not os.path.lexists(base):
+        # resolve() answers "no counterpart" both for a directory that is missing
+        # and for one it was not allowed to walk, and os.path.lexists() says False
+        # for both under a parent we cannot search. Ask the tree itself: a partial
+        # image is missing default directories and that is not a gap, while a
+        # directory that is there but unreachable is one and must reach the report.
+        try:
+            os.lstat(base)
+        except FileNotFoundError:
             # a partial tree does not have every default directory; that is not a gap
             return [], []
+        except OSError as exc:
+            return [], [StatError(base, "resolve", why or exc.strerror or "unresolvable directory")]
         return [], [StatError(base, "resolve", why or "unresolvable directory")]
     names, err = listdir_sorted(listing)
     paths: List[str] = []

@@ -82,13 +82,13 @@ class Report:
         """
         if not self.checks:
             return SKIP
+        for verdict in (FAIL, PARTIAL):
+            if any(c.status == verdict for c in self.checks):
+                return verdict
         if self.primary:
             for check in self.checks:
                 if check.name == self.primary and check.status == SKIP:
                     return SKIP
-        for verdict in (FAIL, PARTIAL):
-            if any(c.status == verdict for c in self.checks):
-                return verdict
         if any(c.status == PASS for c in self.checks):
             return PASS
         return SKIP

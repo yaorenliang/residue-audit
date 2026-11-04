@@ -1,6 +1,6 @@
 # Method
 
-Eight checks across three commands, one stance: **recompute, never self-report.**
+Fourteen checks across three commands, one stance: **recompute, never self-report.**
 
 A measurement is worth something only if someone else can reproduce it without
 trusting the program that produced it. Everything below is written so that a second

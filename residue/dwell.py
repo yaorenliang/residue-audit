@@ -202,12 +202,13 @@ def _coverage(
             if host not in unmatched:
                 unmatched.append(host)
             continue
-        per_rule[rule] = per_rule.get(rule, 0) + 1
         if int(hit["ts"]) < start:
             # before the implant existed: this is a false positive and must not
-            # be allowed to raise the rate for the hosts that were really there
+            # be allowed to raise the rate - or the rule count - for the hosts
+            # that were really there
             pre += 1
             continue
+        per_rule[rule] = per_rule.get(rule, 0) + 1
         post += 1
         hit_hosts.add(host)
     covered = len(hit_hosts)
@@ -266,7 +267,11 @@ def _schema_check(unknown: Dict[str, int]) -> Check:
 
 def _span_check(spans: List[int]) -> Check:
     if not spans:
-        return Check("dwell.span", SKIP, "no host has two distinct timestamps")
+        return Check(
+            "dwell.span",
+            SKIP,
+            "no host recorded an event after its deploy, so no span could be measured",
+        )
     return Check(
         "dwell.span",
         PASS,
@@ -286,9 +291,12 @@ def _coverage_check(cov: _Coverage) -> Check:
     if not cov.defined:
         return Check("dwell.coverage", SKIP, "no host reached deploy, so coverage is undefined")
     if not cov.hits_provided:
+        # nothing to compare the ledger against: the run measured what it could
+        # and leaves coverage open. That is a partial answer - not a pass, and not
+        # a void that lets one inapplicable check outrank four that passed.
         return Check(
             "dwell.coverage",
-            SKIP,
+            PARTIAL,
             "no detection hits supplied; coverage is unknown, not zero",
         )
     rate = cov.rate or 0.0

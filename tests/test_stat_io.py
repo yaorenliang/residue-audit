@@ -161,3 +161,21 @@ class WalkFilesTest(TempDirTest):
         paths, errors = stat_io.walk_files(self.tmp, "etc/nope")
         self.assertEqual(paths, [])
         self.assertEqual(errors, [])
+
+
+class UnreachableScanTest(unittest.TestCase):
+    """A scan directory we cannot search is a gap, a missing one is not."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-stat-perm-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, "etc", "cron.d"))
+
+    def test_an_unsearchable_scan_directory_is_reported(self):
+        locked = os.path.join(self.tmp, "etc")
+        os.chmod(locked, 0o444)
+        self.addCleanup(os.chmod, locked, 0o755)
+        paths, errors = stat_io.walk_files(self.tmp, "etc/cron.d")
+        self.assertEqual(paths, [])
+        self.assertEqual([error.op for error in errors], ["resolve"])
+        self.assertIn("Permission denied", errors[0].err)

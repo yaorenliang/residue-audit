@@ -54,11 +54,16 @@ class DwellTest(unittest.TestCase):
         self.assertEqual(report.facts["verdict"], "covered")
 
     def test_missing_hits_is_unknown_not_zero(self):
+        # no --hits leaves one question open; the four checks that did measure
+        # must still reach the verdict, so the run is partial (exit 1) and never
+        # the "the audit did not happen" skip (exit 3)
         report = dwell.run(self.ledger, None)
         coverage = [c for c in report.checks if c.name == "dwell.coverage"][0]
-        self.assertEqual(coverage.status, SKIP)
+        self.assertEqual(coverage.status, PARTIAL)
         self.assertIn("unknown, not zero", coverage.why)
         self.assertEqual(report.facts["verdict"], "unknown")
+        self.assertEqual(report.status(), PARTIAL)
+        self.assertEqual(report.exit_code(), 1)
 
     def test_empty_ledger_skips(self):
         empty = os.path.join(self.tmp, "empty.ndjson")
@@ -467,6 +472,43 @@ class TheSpanLineStaysReadable(unittest.TestCase):
     def test_a_whole_span_drops_the_trailing_zero(self):
         self.assertEqual(dwell._number(125.0), "125")
 
+
+class SpanAndCountTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-dwell-words-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_span_needs_an_event_after_the_deploy(self):
+        path = os.path.join(self.tmp, "scan-only.ndjson")
+        fx.write_ledger(
+            path,
+            [
+                {"ts": 50, "host": "h1", "event": "scan"},
+                {"ts": 100, "host": "h1", "event": "deploy"},
+            ],
+        )
+        report = dwell.run(path)
+        span = [c for c in report.checks if c.name == "dwell.span"][0]
+        self.assertEqual(span.status, SKIP)
+        self.assertIn("no host recorded an event after its deploy", span.why)
+
+    def test_a_pre_deploy_hit_does_not_raise_a_rule_count(self):
+        hits = os.path.join(self.tmp, "pre.json")
+        fx.write_json(hits, [{"ts": 50, "host": "h1", "rule": "sigma:beacon"}])
+        path = os.path.join(self.tmp, "pre.ndjson")
+        fx.write_ledger(
+            path,
+            [
+                {"ts": 100, "host": "h1", "event": "deploy"},
+                {"ts": 200, "host": "h1", "event": "mine"},
+                {"ts": 210, "host": "h2", "event": "deploy"},
+                {"ts": 220, "host": "h2", "event": "mine"},
+            ],
+        )
+        report = dwell.run(path, hits)
+        coverage = [c for c in report.checks if c.name == "dwell.coverage"][0]
+        self.assertEqual([item.field for item in coverage.evidence], [])
+        self.assertEqual(report.facts["hits_pre_deploy"], 1)
 
 if __name__ == "__main__":
     unittest.main()

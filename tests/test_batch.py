@@ -148,5 +148,26 @@ class BatchSinglePassTest(unittest.TestCase):
         self.assertEqual(batch._verdict(0.95, 0.98)[0], PASS)
 
 
+class DuplicateNameTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="residue-batch-dup-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_two_files_with_one_name_get_two_names(self):
+        from tests import fixtures as fx
+
+        paths = []
+        for index, features in enumerate((["a", "b"], ["a", "c"], ["z"])):
+            path = os.path.join(self.tmp, "dup%d.json" % index)
+            fx.write_json(path, {"name": "build", "features": features})
+            paths.append(path)
+        report = batch.run(paths)
+        names = [c.name for c in report.checks]
+        self.assertEqual(len(names), 3)
+        self.assertEqual(len(set(names)), 3)
+        self.assertEqual(
+            report.facts["sizes"], {"build#1": 2, "build#2": 2, "build#3": 1}
+        )
+
 if __name__ == "__main__":
     unittest.main()

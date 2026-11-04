@@ -227,8 +227,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         # the renderer owns the conversion of facts into json shapes; doing it
         # here as well left report.as_json reachable and still broken.
         sys.stdout.write(report_mod.render(report, bool(args.json)))
+        if not report_mod.flush_stdout():
+            sys.stderr.write("residue: error: stdout closed before the report was written\n")
+            return EXIT[ERROR]
         return report.exit_code()
     except ToolError as exc:
+        report_mod.flush_stdout()
         sys.stderr.write("residue: error: %s\n" % (exc,))
         return EXIT[ERROR]
     except SystemExit as exc:
@@ -236,6 +240,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # main() stays an ordinary function of its argument.
         return _exit_code(exc)
     except Exception as exc:  # the last net: a crash is never a verdict
+        report_mod.flush_stdout()
         sys.stderr.write("residue: error: %s: %s\n" % (type(exc).__name__, exc))
         return EXIT[ERROR]
 
